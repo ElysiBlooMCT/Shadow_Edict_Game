@@ -146,10 +146,16 @@ jobs:
           ./gradlew --console=plain -PprojectVersion=$V \
             lwjgl3:packageWinX64 lwjgl3:packageLinuxX64 lwjgl3:packageMacM1 lwjgl3:packageMacX64 lwjgl3:jar
           mkdir -p dist
-          # construo đặt tên dạng ShadowEdict-winX64.zip -> tìm không phân biệt hoa thường, trong toàn bộ lwjgl3/build
+          echo "== Nội dung build/construo =="; find lwjgl3/build/construo -maxdepth 2 | sort
+          # Gói hoàn chỉnh nằm trong build/construo/dist (tên kiểu ShadowEdict-winX64.zip).
+          # KHÔNG tìm ở chỗ khác: trong build/construo còn có file JDK construo tải về (cũng là .zip), lấy nhầm sẽ ra gói chỉ có JDK.
           for t in winX64:windows-x64 linuxX64:linux-x64 macM1:macos-apple-silicon macX64:macos-intel; do
-            src=$(find lwjgl3/build -type f -iname "*${t%%:*}*.zip" | head -1)
-            if [ -n "$src" ]; then cp "$src" "dist/ShadowEdict-$V-${t##*:}.zip"; else echo "::warning::Không thấy gói ${t%%:*}"; fi
+            src=$(find lwjgl3/build/construo/dist -maxdepth 1 -type f -iname "*${t%%:*}*.zip" ! -iname "*jdk*" | head -1)
+            [ -n "$src" ] || { echo "::error::Không thấy gói ${t%%:*} trong lwjgl3/build/construo/dist"; exit 1; }
+            # Kiểm tra gói có chứa game thật (file/thư mục mang tên ShadowEdict / Shadow Edict), không phải chỉ có JDK
+            unzip -l "$src" | grep -qiE "shadow ?edict" || { echo "::error::Gói $src không chứa file game"; unzip -l "$src" | head -30; exit 1; }
+            cp "$src" "dist/ShadowEdict-$V-${t##*:}.zip"
+            echo "OK ${t##*:}: $src"; unzip -l "$src" | grep -iE "\.exe$|\.app/|ShadowEdict" | head -5
           done
           # Bản JAR chạy mọi hệ điều hành (cần cài Java 11+): dự phòng nếu bản đóng gói gặp lỗi
           cp lwjgl3/build/libs/*.jar "dist/ShadowEdict-$V-all-platforms.jar"
