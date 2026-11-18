@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Cấu hình Game Mode API (Android 12 trở lên).
+    - supports*GameMode = false: game KHÔNG tự đổi chất lượng theo chế độ, nên để hệ thống can thiệp.
+    - allowGameDownscaling = true: chế độ Tiết kiệm pin được phép giảm độ phân giải render.
+    - allowGameFpsOverride = true: chế độ Tiết kiệm pin được phép giới hạn FPS. An toàn vì vật lý
+      đã chạy bước cố định 1/60s, tốc độ game không phụ thuộc FPS (đã sửa ở v1.1).
+-->
+<game-mode-config xmlns:android="http://schemas.android.com/apk/res/android"
+    android:supportsBatteryGameMode="false"
+    android:supportsPerformanceGameMode="false"
+    android:allowGameDownscaling="true"
+    android:allowGameFpsOverride="true" />
