@@ -39,6 +39,9 @@ jobs:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
       - uses: android-actions/setup-android@v3
+        with:
+          # Mặc định action cài gói 'tools' đã bị Google gỡ khỏi kho -> lỗi. Chỉ cần platform-tools; Gradle tự tải platform/build-tools còn thiếu.
+          packages: 'platform-tools'
       - uses: gradle/actions/setup-gradle@v4
       - name: Giải mã khóa ký APK từ GitHub Secrets
         env:
