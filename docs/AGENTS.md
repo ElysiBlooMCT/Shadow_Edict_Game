@@ -14,5 +14,5 @@ Trang này dựng lại theo khung của web Minecraft ElysiBlooMCT (cùng `styl
 - Module mới so với web Minecraft: `download` (thẻ tải + hướng dẫn cài), `controls` (dùng chung kiểu hiển thị với `join`).
 - Mỗi lần sửa `assets/styles.css` / `assets/script.js` / `mobile.*`: đổi `?v=...` trong mọi file `.html` (kể cả `404.html`).
 - Code công khai (`assets/*.css`, `assets/*.js`, `.html`) không thêm chú thích; chú thích chỉ để trong `assets/data/*.js`.
-- `404.html` dùng đường dẫn tuyệt đối `/Shadow_Edict_Game/`. Nếu sau này gắn tên miền riêng, đổi hết thành `/`.
+- Web chạy ở tên miền riêng `shadow.elysibloomct.qzz.io` (file `CNAME`), nên `404.html` dùng đường dẫn tuyệt đối từ `/`. Không xoá `CNAME`.
 - Thư mục `docs/**` nằm trong `paths-ignore` của workflow: sửa web không làm build lại game.

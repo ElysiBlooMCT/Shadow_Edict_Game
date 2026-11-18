@@ -4,6 +4,13 @@ Quy tắc: sau MỖI lần sửa, thêm một mục mới **lên trên cùng**. 
 
 ---
 
+## 2026-11-18 | Claude (tên miền riêng)
+- Đã làm: web chuyển sang tên miền `shadow.elysibloomct.qzz.io`; `404.html` đổi đường dẫn `/Shadow_Edict_Game/` thành `/`; cập nhật `AGENTS.md`.
+- File: `404.html`, `AGENTS.md`, `AI-LOG.md`.
+- Còn dang dở: bật Enforce HTTPS sau khi GitHub cấp chứng chỉ.
+
+---
+
 ## 2026-11-18 | Claude (đổi màu theo game)
 - Đã làm: đổi bảng màu sang vàng kim / đỏ thẫm / tím hoàng hôn lấy từ ảnh game; font tiêu đề Cormorant Garamond thay VT323 (bỏ thư mục fonts); logo đầu trang và trang chủ dùng logo "Shadow Edict / Ám Lệnh" tách từ ảnh nền (`assets/img/game-logo.png`); ảnh trong thẻ phiên bản cắt bỏ phần chữ (`assets/img/scene.jpg`); icon ♡ đổi thành ◆; `?v=20261118b`. Chân trang giữ logo ElysiBlooMCT như cũ.
 - File: `assets/styles.css`, `assets/mobile.css`, `assets/script.js`, `assets/data/site.js`, `home.js`, `modes.js`, `download.js`, mọi `*.html`, `AGENTS.md`.
