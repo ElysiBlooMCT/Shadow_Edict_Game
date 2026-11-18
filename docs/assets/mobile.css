@@ -1,0 +1,51 @@
+@media (max-width: 900px) {
+  html { scroll-behavior: auto; scroll-padding-top: 4.5rem; }
+  .hero-grid, .card-grid, .card-grid-2, .join-grid, .steps-grid { grid-template-columns: 1fr; }
+  .hero { padding: 2rem 0 1.6rem; }
+  .sparkle { display: none; }
+
+  .site-header { position: sticky; top: 0; }
+  .nav-wrap { position: relative; flex-direction: row; justify-content: flex-start; align-items: center; gap: 0.6rem; padding: 0.4rem 0; min-height: 56px; }
+  .menu-toggle {
+    display: inline-flex; flex-direction: column; justify-content: center; align-items: center; gap: 5px;
+    flex: none; width: 44px; height: 44px; padding: 0; cursor: pointer;
+    background: rgba(226, 182, 90, 0.12); border: 2px solid var(--hot); border-radius: 0.5rem; color: var(--text);
+    box-shadow: 0 3px 0 var(--wine-deep);
+  }
+  .menu-toggle span { display: block; width: 20px; height: 3px; background: var(--blush, #fff); border-radius: 1px; transition: transform 0.2s ease, opacity 0.2s ease; }
+  .site-header.menu-open .menu-toggle span:nth-child(1) { transform: translateY(8px) rotate(45deg); }
+  .site-header.menu-open .menu-toggle span:nth-child(2) { opacity: 0; }
+  .site-header.menu-open .menu-toggle span:nth-child(3) { transform: translateY(-8px) rotate(-45deg); }
+  .brand { min-height: 44px; align-items: center; }
+  .brand-logo { height: 32px; }
+  .brand-icon { width: 34px; height: 34px; }
+  .brand-logo-game { height: 38px; }
+  .brand-text { font-size: 1.6rem; }
+
+  .nav-wrap > nav {
+    display: none; position: absolute; left: 0; right: 0; top: 100%; z-index: 20;
+    max-height: calc(100dvh - 70px); overflow-y: auto;
+    background: #0c0a09; border: 2px solid var(--wine); border-top: 0;
+    border-radius: 0 0 0.8rem 0.8rem; box-shadow: 0 14px 28px rgba(0, 0, 0, 0.5);
+  }
+  .site-header.menu-open .nav-wrap > nav { display: block; }
+  .nav-links { flex-direction: column; flex-wrap: nowrap; justify-content: flex-start; gap: 0; padding: 0.4rem 0; }
+  .nav-links a { display: flex; align-items: center; min-height: 48px; padding: 0.5rem 1.1rem; border-radius: 0; font-size: 1.05rem; }
+
+  .footer-wrap { flex-direction: column; align-items: center; text-align: center; gap: 0.8rem; }
+  .footer-brand { align-items: center; }
+  .footer-links { justify-content: center; }
+  .site-footer a { display: inline-block; padding: 0.5rem 0; }
+}
+@media (max-width: 640px) {
+  .hero h1 { font-size: clamp(2.8rem, 13vw, 3.6rem); }
+  .hero-logo img { width: min(100%, 420px); margin: 0 auto; }
+  .hero-panel { padding: 1.6rem 1.1rem 1.4rem; }
+  .hero-badge { position: static; margin-top: 1.2rem; }
+  .hero-art { margin: -0.2rem 0 1rem; }
+  .btn { min-height: 44px; }
+  summary { min-height: 44px; }
+  .section { padding: 1.9rem 0; }
+  main > .section:first-child { padding-top: 2rem; }
+  .scroll-reveal { transform: translateY(12px); transition-duration: 0.4s; }
+}
