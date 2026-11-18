@@ -64,11 +64,17 @@ jobs:
             -PreleaseVersion=${{ needs.version.outputs.name }} -PreleaseCode=${{ needs.version.outputs.code }}
           mkdir -p dist
           cp android/build/outputs/apk/release/*.apk "dist/ShadowEdict-${{ needs.version.outputs.name }}-android.apk"
-          cp android/build/outputs/bundle/release/*.aab "dist/ShadowEdict-${{ needs.version.outputs.name }}-android.aab"
+          mkdir -p private
+          # AAB chỉ dùng để đăng CH Play -> KHÔNG đưa vào Release công khai, tránh người khác lấy đi đăng trước.
+          cp android/build/outputs/bundle/release/*.aab "private/ShadowEdict-${{ needs.version.outputs.name }}-android.aab"
       - uses: actions/upload-artifact@v4
         with:
           name: android
           path: dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-aab-private
+          path: private/*
 
   desktop:
     needs: version
@@ -105,10 +111,15 @@ jobs:
     needs: [version, android, desktop]
     runs-on: ubuntu-latest
     steps:
+      # Chỉ lấy APK + bản PC; artifact android-aab-private không được đăng lên Release
       - uses: actions/download-artifact@v4
         with:
+          name: android
           path: dist
-          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop
+          path: dist
       - uses: softprops/action-gh-release@v2
         with:
           name: "Shadow Edict: Ám Lệnh ${{ needs.version.outputs.name }}"
