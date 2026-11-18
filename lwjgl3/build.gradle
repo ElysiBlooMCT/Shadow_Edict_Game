@@ -143,7 +143,9 @@ construo {
   jlink {
     guessModulesFromJar.set(false)
     // You may need to add more modules, as needed.
-    modules.addAll("java.base", "java.management", "java.desktop", "jdk.unsupported")
+    // java.logging: socket.io-client / okhttp dung java.util.logging -> thieu la game tat ngay khi mo (ban .exe).
+    // jdk.crypto.ec: can cho ket noi HTTPS/WSS toi game.elysibloomct.qzz.io.
+    modules.addAll("java.base", "java.management", "java.desktop", "jdk.unsupported", "java.logging", "jdk.crypto.ec")
   }
 
   targets.configure {
