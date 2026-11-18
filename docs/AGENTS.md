@@ -11,7 +11,8 @@ Trang này dựng lại theo khung của web Minecraft ElysiBlooMCT (cùng `styl
   - `footer.js`: chân trang, giữ giống web ElysiBlooMCT.
   - `changelog.js`: lịch sử cập nhật của game.
 - Màu và font theo game (vàng kim, đỏ thẫm, nền tối; tiêu đề Cormorant Garamond có tiếng Việt), khác web Minecraft. Logo đầu trang là `assets/img/game-logo.png` tách từ ảnh nền game.
-- Module mới so với web Minecraft: `download` (thẻ tải + hướng dẫn cài), `controls` (dùng chung kiểu hiển thị với `join`).
+- Module mới so với web Minecraft: `download` (thẻ tải + hướng dẫn cài), `controls` (dùng chung kiểu hiển thị với `join`), `gallery` (lưới ảnh + xem ảnh lớn; trang chủ chỉ hiện số ảnh đặt ở `data-limit`). Thẻ trong `modes` có thể có ảnh (`image`). Chân trang có thêm dòng `note`.
+- Ảnh chụp game nằm trong `assets/img/shots/` (bản `-s.jpg` 640px cho lưới, bản thường 1280px khi phóng to).
 - Mỗi lần sửa `assets/styles.css` / `assets/script.js` / `mobile.*`: đổi `?v=...` trong mọi file `.html` (kể cả `404.html`).
 - Code công khai (`assets/*.css`, `assets/*.js`, `.html`) không thêm chú thích; chú thích chỉ để trong `assets/data/*.js`.
 - Web chạy ở tên miền riêng `shadow.elysibloomct.qzz.io` (file `CNAME`), nên `404.html` dùng đường dẫn tuyệt đối từ `/`. Không xoá `CNAME`.

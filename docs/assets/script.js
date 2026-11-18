@@ -91,6 +91,20 @@ function renderCards(data) {
             icon.setAttribute("aria-hidden", "true");
             card.append(icon);
         }
+        if (item.image) {
+            const shot = el("button", "card-image");
+            shot.type = "button";
+            const img = el("img");
+            img.src = `${ASSETS}${item.image}`;
+            img.alt = fill(item.title || "");
+            img.loading = "lazy";
+            img.width = 640;
+            img.height = 360;
+            shot.append(img);
+            shot.addEventListener("click", () => openLightbox([ { src: item.imageFull || item.image, title: item.title, text: item.caption } ], 0));
+            card.classList.add("card-has-image");
+            card.prepend(shot);
+        }
         card.append(el("h3", "", fill(item.title || "")));
         if (item.text) card.append(richText(el("p"), item.text));
         if (item.buttons && item.buttons.length) {
@@ -323,6 +337,87 @@ function fillRelease() {
     });
 }
 
+let LIGHTBOX = null;
+
+function openLightbox(items, index) {
+    if (!LIGHTBOX) {
+        const dialog = el("dialog", "lightbox");
+        dialog.setAttribute("aria-label", "Xem ảnh");
+        const figure = el("figure");
+        const img = el("img");
+        const caption = el("figcaption");
+        figure.append(img, caption);
+        const close = el("button", "lightbox-close", "×");
+        close.type = "button";
+        close.setAttribute("aria-label", "Đóng");
+        const prev = el("button", "lightbox-nav lightbox-prev", "‹");
+        prev.type = "button";
+        prev.setAttribute("aria-label", "Ảnh trước");
+        const next = el("button", "lightbox-nav lightbox-next", "›");
+        next.type = "button";
+        next.setAttribute("aria-label", "Ảnh sau");
+        dialog.append(figure, close, prev, next);
+        document.body.append(dialog);
+        LIGHTBOX = { dialog, img, caption, prev, next, items: [], index: 0 };
+        const show = step => {
+            const box = LIGHTBOX;
+            box.index = (box.index + step + box.items.length) % box.items.length;
+            const item = box.items[box.index];
+            box.img.src = `${ASSETS}${item.src}`;
+            box.img.alt = fill(item.title || "");
+            box.caption.replaceChildren();
+            if (item.title) box.caption.append(el("strong", "", fill(item.title)));
+            if (item.text) box.caption.append(richText(el("span"), item.text));
+            const many = box.items.length > 1;
+            box.prev.hidden = !many;
+            box.next.hidden = !many;
+        };
+        LIGHTBOX.show = show;
+        close.addEventListener("click", () => dialog.close());
+        prev.addEventListener("click", () => show(-1));
+        next.addEventListener("click", () => show(1));
+        dialog.addEventListener("click", event => {
+            if (event.target === dialog) dialog.close();
+        });
+        dialog.addEventListener("keydown", event => {
+            if (event.key === "ArrowLeft") show(-1);
+            if (event.key === "ArrowRight") show(1);
+        });
+    }
+    LIGHTBOX.items = items;
+    LIGHTBOX.index = index;
+    LIGHTBOX.show(0);
+    if (typeof LIGHTBOX.dialog.showModal === "function") LIGHTBOX.dialog.showModal(); else window.open(`${ASSETS}${items[index].src}`, "_blank");
+}
+
+function renderGallery(data, section) {
+    const fragment = document.createDocumentFragment();
+    const all = (data.items || []).map(item => ({ src: item.full || item.thumb, title: item.title, text: item.text }));
+    const limit = parseInt(section && section.dataset.limit, 10) || all.length;
+    const grid = el("div", "gallery-grid");
+    (data.items || []).slice(0, limit).forEach((item, index) => {
+        const tile = el("button", "gallery-item");
+        tile.type = "button";
+        const img = el("img");
+        img.src = `${ASSETS}${item.thumb || item.full}`;
+        img.alt = fill(item.title || "");
+        img.loading = "lazy";
+        img.width = 640;
+        img.height = 360;
+        const label = el("span", "gallery-label", fill(item.title || ""));
+        tile.append(img, label);
+        tile.addEventListener("click", () => openLightbox(all, index));
+        grid.append(tile);
+    });
+    fragment.append(grid);
+    if (limit < all.length && data.more) {
+        const actions = el("div", "card-actions");
+        actions.append(linkButton(data.more));
+        fragment.append(actions);
+    }
+    return fragment;
+}
+
 const MODULE_RENDERERS = {
     home: renderCards,
     about: renderAbout,
@@ -338,7 +433,8 @@ const MODULE_RENDERERS = {
     faq: renderFaq,
     download: renderDownload,
     controls: renderJoin,
-    story: renderAbout
+    story: renderAbout,
+    gallery: renderGallery
 };
 
 function currentSlug() {
@@ -426,6 +522,7 @@ function renderShell() {
         }
         const text = conf.text || "© {year} {name}.";
         brandBox.append(el("p", "", fill(text).replace(/\{year\}/g, String((new Date).getFullYear()))));
+        if (conf.note) brandBox.append(richText(el("p", "footer-note"), conf.note));
         wrap.append(brandBox);
         const links = el("nav", "footer-links");
         links.setAttribute("aria-label", "Liên kết chân trang");
@@ -467,7 +564,7 @@ function buildModules() {
                 container.append(heading);
                 section.setAttribute("aria-labelledby", heading.id);
             }
-            container.append(render(data));
+            container.append(render(data, section));
             section.id = name;
             section.append(container);
         } catch (error) {

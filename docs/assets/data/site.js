@@ -45,6 +45,7 @@ SITE.nav = [
   { label: "Giới thiệu", url: "/about/" },
   { label: "Chế độ chơi", url: "/modes/" },
   { label: "Điều khiển", url: "/controls/" },
+  { label: "Hình ảnh", url: "/gallery/" },
   { label: "Tải game", url: "/download/" },
   { label: "Changelog", url: "/changelog/" },
   { label: "FAQ", url: "/faq/" },
