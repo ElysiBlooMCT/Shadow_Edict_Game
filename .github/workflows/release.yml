@@ -93,14 +93,14 @@ jobs:
             lwjgl3:packageWinX64 lwjgl3:packageLinuxX64 lwjgl3:packageMacM1 lwjgl3:packageMacX64 lwjgl3:jar
           mkdir -p dist
           V=${{ needs.version.outputs.name }}
-          for t in WinX64:windows-x64 LinuxX64:linux-x64 MacM1:macos-apple-silicon MacX64:macos-intel; do
-            src=$(ls lwjgl3/build/construo/dist/*${t%%:*}*.zip 2>/dev/null | head -1)
-            [ -z "$src" ] && src=$(ls lwjgl3/build/construo/dist/*$(echo ${t%%:*} | tr 'A-Z' 'a-z')*.zip 2>/dev/null | head -1)
-            [ -n "$src" ] && cp "$src" "dist/ShadowEdict-$V-${t##*:}.zip" || echo "::warning::Không thấy gói ${t%%:*}"
+          # construo đặt tên dạng ShadowEdict-winX64.zip -> tìm không phân biệt hoa thường, trong toàn bộ lwjgl3/build
+          for t in winX64:windows-x64 linuxX64:linux-x64 macM1:macos-apple-silicon macX64:macos-intel; do
+            src=$(find lwjgl3/build -type f -iname "*${t%%:*}*.zip" | head -1)
+            if [ -n "$src" ]; then cp "$src" "dist/ShadowEdict-$V-${t##*:}.zip"; else echo "::warning::Không thấy gói ${t%%:*}"; fi
           done
           # Bản JAR chạy mọi hệ điều hành (cần cài Java 11+): dự phòng nếu bản đóng gói gặp lỗi
           cp lwjgl3/build/libs/*.jar "dist/ShadowEdict-$V-all-platforms.jar"
-          ls -la dist lwjgl3/build/construo/dist || true
+          ls -la dist; find lwjgl3/build -name '*.zip' || true
       - uses: actions/upload-artifact@v4
         with:
           name: desktop
