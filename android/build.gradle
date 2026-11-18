@@ -36,7 +36,7 @@ android {
     targetSdkVersion 36
     // GitHub Actions truyền -PreleaseCode / -PreleaseVersion theo tag (v1.5.1...); build tay dùng giá trị mặc định
     versionCode((project.findProperty('releaseCode') ?: '3') as int)
-    versionName(project.findProperty('releaseVersion') ?: '1.5')
+    versionName(project.findProperty('releaseVersion') ?: project.findProperty('projectVersion') ?: '1.5')
   }
   // Khóa ký bản phát hành: đọc từ biến môi trường (GitHub Secrets), KHÔNG để file .jks hay mật khẩu trong repo.
   // Không có biến môi trường (build trên máy cá nhân) thì bản release ký bằng khóa debug để vẫn cài thử được.

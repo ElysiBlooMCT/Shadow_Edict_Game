@@ -38,7 +38,7 @@ import com.badlogic.gdx.utils.viewport.FitViewport;
  *  - Chữ vàng nghiêng nhấp nháy cạnh logo, dòng phiên bản ở góc dưới.
  */
 public class MainMenuScreen extends ScreenAdapter implements NetworkManager.FriendsUpdateListener {
-    public static final String VERSION = "1.5";
+    public static final String VERSION = BuildInfo.VERSION;
 
     private static final float W = 1280f, H = 720f;
     private static final Color ACCENT = new Color(1.00f, 0.34f, 0.36f, 1f);

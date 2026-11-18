@@ -1,15 +1,35 @@
 # Tự build 4 bản (Android, Windows, macOS, Linux) và đăng lên mục Releases của GitHub.
-# Kích hoạt: đẩy một tag dạng v1.5.1 (git tag v1.5.1 && git push origin v1.5.1),
-#            hoặc bấm "Run workflow" trong tab Actions (chỉ build, không tạo Release).
+#
+# KHI NÀO TỰ PHÁT HÀNH (Release):
+#   1. Đổi projectVersion trong gradle.properties (vd 1.5.1 -> 1.5.2) rồi push lên main
+#      -> chưa có tag v1.5.2 nên workflow tự tạo tag + Release 1.5.2.
+#   2. Ngày 1 hằng tháng (02:00 UTC = 09:00 giờ VN): nếu có commit mới kể từ bản phát hành gần nhất
+#      mà chưa ai phát hành -> tự tăng số cuối (1.5.2 -> 1.5.3) và phát hành. Không có gì mới thì bỏ qua.
+#   3. Bấm "Run workflow" và tích ô "Phát hành luôn".
+# Push code bình thường (không đổi version) -> chỉ build thử, file nằm ở mục Artifacts, KHÔNG phát hành.
+# Không cần tự gõ git tag nữa.
 name: Build & Release
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths-ignore: ['**.md', 'server/**', '.gitignore']
+  schedule:
+    - cron: '0 2 1 * *'
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Phát hành luôn (tạo Release với version trong gradle.properties)'
+        type: boolean
+        default: false
 
 permissions:
-  contents: write   # cần để tạo Release và đính kèm file
+  contents: write   # cần để tạo tag, Release và đính kèm file
+
+# Push liên tục thì huỷ lần build cũ còn đang chạy, chỉ giữ lần mới nhất
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   # JDK 21 bản mới nhất của Temurin (construo tự tải JDK riêng để đóng gói nên không cần khớp từng bản vá)
@@ -21,16 +41,47 @@ jobs:
     outputs:
       name: ${{ steps.v.outputs.name }}
       code: ${{ steps.v.outputs.code }}
+      release: ${{ steps.v.outputs.release }}
+      build: ${{ steps.v.outputs.build }}
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # cần lịch sử + tag để so sánh
       - id: v
+        env:
+          EVENT: ${{ github.event_name }}
+          FORCE: ${{ github.event.inputs.release }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then NAME="${GITHUB_REF#refs/tags/v}"; else NAME="0.0.0-dev.${GITHUB_RUN_NUMBER}"; fi
-          # versionCode phải luôn tăng: lấy số lần chạy workflow + 100 (lớn hơn các bản build tay trước đây)
+          BASE=$(grep '^projectVersion=' gradle.properties | cut -d= -f2 | tr -d '\r ')
+          has_tag() { git rev-parse -q --verify "refs/tags/v$1" >/dev/null; }
+          BUILD=true; RELEASE=false
+          if ! has_tag "$BASE" && { [ "$EVENT" = push ] || [ "$EVENT" = schedule ] || [ "$FORCE" = true ]; }; then
+            NAME="$BASE"; RELEASE=true                       # version mới trong gradle.properties
+          elif [ "$EVENT" = schedule ]; then
+            LAST=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "v$BASE")
+            if [ -n "$(git log "$LAST"..HEAD --oneline)" ]; then
+              IFS=. read -r a b c <<< "${LAST#v}"
+              NAME="$a.$b.$(( ${c:-0} + 1 ))"
+              while has_tag "$NAME"; do IFS=. read -r a b c <<< "$NAME"; NAME="$a.$b.$((c + 1))"; done
+              RELEASE=true                                   # bản định kỳ hằng tháng
+            else
+              NAME="$BASE"; BUILD=false                      # tháng này không có gì mới
+            fi
+          elif [ "$FORCE" = true ]; then
+            echo "::error::Đã có bản v$BASE. Hãy tăng projectVersion trong gradle.properties trước khi phát hành."; exit 1
+          else
+            NAME="$BASE-dev.$GITHUB_RUN_NUMBER"              # chỉ build thử
+          fi
+          # versionCode phải luôn tăng: số lần chạy workflow + 100
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "code=$((GITHUB_RUN_NUMBER + 100))" >> "$GITHUB_OUTPUT"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "### Version: $NAME | Phát hành: $RELEASE | Build: $BUILD" >> "$GITHUB_STEP_SUMMARY"
 
   android:
     needs: version
+    if: needs.version.outputs.build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -50,6 +101,7 @@ jobs:
           if [ -n "$KEYSTORE_B64" ]; then
             echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
             echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "Đã nạp khóa ký thật."
           else
             echo "::warning::Chưa có secret ANDROID_KEYSTORE_BASE64 -> APK được ký bằng khóa debug tạm, người chơi sẽ KHÔNG cập nhật đè được lên bản sau."
           fi
@@ -60,13 +112,13 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           chmod +x gradlew
+          V=${{ needs.version.outputs.name }}
           ./gradlew --console=plain android:assembleRelease android:bundleRelease \
-            -PreleaseVersion=${{ needs.version.outputs.name }} -PreleaseCode=${{ needs.version.outputs.code }}
-          mkdir -p dist
-          cp android/build/outputs/apk/release/*.apk "dist/ShadowEdict-${{ needs.version.outputs.name }}-android.apk"
-          mkdir -p private
+            -PprojectVersion=$V -PreleaseVersion=$V -PreleaseCode=${{ needs.version.outputs.code }}
+          mkdir -p dist private
+          cp android/build/outputs/apk/release/*.apk "dist/ShadowEdict-$V-android.apk"
           # AAB chỉ dùng để đăng CH Play -> KHÔNG đưa vào Release công khai, tránh người khác lấy đi đăng trước.
-          cp android/build/outputs/bundle/release/*.aab "private/ShadowEdict-${{ needs.version.outputs.name }}-android.aab"
+          cp android/build/outputs/bundle/release/*.aab "private/ShadowEdict-$V-android.aab"
       - uses: actions/upload-artifact@v4
         with:
           name: android
@@ -78,6 +130,7 @@ jobs:
 
   desktop:
     needs: version
+    if: needs.version.outputs.build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -89,10 +142,10 @@ jobs:
       - name: Đóng gói Windows / macOS (Apple Silicon + Intel) / Linux kèm sẵn Java
         run: |
           chmod +x gradlew
-          ./gradlew --console=plain -PprojectVersion=${{ needs.version.outputs.name }} \
+          V=${{ needs.version.outputs.name }}
+          ./gradlew --console=plain -PprojectVersion=$V \
             lwjgl3:packageWinX64 lwjgl3:packageLinuxX64 lwjgl3:packageMacM1 lwjgl3:packageMacX64 lwjgl3:jar
           mkdir -p dist
-          V=${{ needs.version.outputs.name }}
           # construo đặt tên dạng ShadowEdict-winX64.zip -> tìm không phân biệt hoa thường, trong toàn bộ lwjgl3/build
           for t in winX64:windows-x64 linuxX64:linux-x64 macM1:macos-apple-silicon macX64:macos-intel; do
             src=$(find lwjgl3/build -type f -iname "*${t%%:*}*.zip" | head -1)
@@ -100,14 +153,14 @@ jobs:
           done
           # Bản JAR chạy mọi hệ điều hành (cần cài Java 11+): dự phòng nếu bản đóng gói gặp lỗi
           cp lwjgl3/build/libs/*.jar "dist/ShadowEdict-$V-all-platforms.jar"
-          ls -la dist; find lwjgl3/build -name '*.zip' || true
+          ls -la dist
       - uses: actions/upload-artifact@v4
         with:
           name: desktop
           path: dist/*
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: needs.version.outputs.release == 'true'
     needs: [version, android, desktop]
     runs-on: ubuntu-latest
     steps:
@@ -122,6 +175,29 @@ jobs:
           path: dist
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.version.outputs.name }}
+          target_commitish: ${{ github.sha }}
           name: "Shadow Edict: Ám Lệnh ${{ needs.version.outputs.name }}"
+          make_latest: true
           generate_release_notes: true
+          body: |
+            ## Tải về
+            | Thiết bị | File |
+            |---|---|
+            | Android 7.0 trở lên | `ShadowEdict-${{ needs.version.outputs.name }}-android.apk` |
+            | Windows 64-bit | `...-windows-x64.zip` → giải nén, chạy `ShadowEdict.exe` |
+            | macOS Apple Silicon (M1/M2/M3…) | `...-macos-apple-silicon.zip` |
+            | macOS Intel | `...-macos-intel.zip` |
+            | Linux 64-bit | `...-linux-x64.zip` |
+            | Máy đã cài Java 11+ | `...-all-platforms.jar` (`java -jar <file>`) |
+
+            **Android:** đã cài bản trước thì cài đè lên, không mất dữ liệu.
+
+            **macOS:** game chưa được Apple ký nên lần đầu macOS báo "damaged / không thể mở". Giải nén, rồi mở Terminal chạy:
+            ```
+            xattr -cr ~/Downloads/"Shadow Edict.app"
+            ```
+            (hoặc chuột phải vào app → Open → Open).
+
+            > Dự án học tập, phi thương mại.
           files: dist/*
