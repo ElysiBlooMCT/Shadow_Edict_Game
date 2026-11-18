@@ -38,3 +38,13 @@ Lịch sử thay đổi: xem [CHANGELOG.md](CHANGELOG.md).
 
 Project được tạo từ [gdx-liftoff](https://github.com/libgdx/gdx-liftoff). Các tham số Gradle hữu ích:
 `--offline`, `--refresh-dependencies`, `clean`, `android:lint`.
+
+## Tải game
+
+Bản mới nhất cho Android, Windows, macOS, Linux: xem mục [Releases](https://github.com/ElysiBlooMCT/Shadow_Edict_Game/releases/latest).
+
+## Bản quyền
+
+© 2026 ElysiBlooMCT. All rights reserved.
+Mã nguồn được công khai để tham khảo và học tập; không được sao chép, phân phối lại hay sử dụng mã nguồn, hình ảnh, âm thanh cho mục đích khác khi chưa có sự đồng ý của tác giả.
+Dự án học tập, phi thương mại.
