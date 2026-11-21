@@ -4,6 +4,18 @@ Quy tắc: sau MỖI lần sửa, thêm một mục mới **lên trên cùng**. 
 
 ---
 
+## 2026-11-21 | Claude (logo màn tải bản web)
+- Đã làm (phần game): màn hình tải của bản web dùng logo ElysiBlooMCT (`assets/web_loading_logo.png`, chép từ `docs/assets/logo.png`) thay logo libGDX.
+- File: `teavm/.../WebLauncher.java`, `assets/web_loading_logo.png` (mới).
+
+---
+
+## 2026-11-21 | Claude (biểu tượng tab + nút Thoát trên web)
+- Đã làm (phần game): trang /play/ có biểu tượng tab và tiêu đề; nút THOÁT / phím Back ở menu bản web quay về trang chủ website (../). Không sửa file trong docs.
+- File: `core/.../Main.java`, `core/.../MainMenuScreen.java`, `teavm/.../WebLauncher.java`.
+
+---
+
 ## 2026-11-21 | Claude (bảng lưu ý + xoay ngang trên web)
 - Đã làm (phần game, không phải web tĩnh): bản web hiện bảng lưu ý mỗi lần mở (tải ~100 MB, chưa có micro, lưu trong trình duyệt, chạy chậm hơn, tự xoay ngang) với nút Tải ứng dụng -> ../download/; điện thoại để dọc thì game tự vẽ nằm ngang (PortraitRotation). Không sửa file nào trong docs.
 - File: `core/.../Main.java`, `core/.../PortraitRotation.java`, `teavm/.../WebLauncher.java`.

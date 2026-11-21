@@ -142,7 +142,7 @@ public class MainMenuScreen extends ScreenAdapter implements NetworkManager.Frie
                         openFriends(); return true;
                     case Input.Keys.ESCAPE: case Input.Keys.BACK:
                         if (activePanel == playPanel) { showPanel(mainPanel); return true; }
-                        if (keycode == Input.Keys.BACK) { Gdx.app.exit(); return true; }
+                        if (keycode == Input.Keys.BACK) { Main.exitGame(); return true; }
                         return false;
                     case Input.Keys.ENTER: case Input.Keys.SPACE: case Input.Keys.NUMPAD_ENTER:
                         enterArmed = true; // chỉ mở khi NHẢ phím, tránh màn kế tiếp nhận luôn cú Enter này
@@ -270,7 +270,7 @@ public class MainMenuScreen extends ScreenAdapter implements NetworkManager.Frie
         float hw = (COL_W - btnGap) / 2f;
         main.add(addButton(mainPanel, "CÀI ĐẶT", null, "Đổi tên, âm nhạc, âm thanh và xem phím điều khiển.",
             0, y, hw, btnHeight, this::openSettings));
-        main.add(addButton(mainPanel, "THOÁT", null, "Thoát game.", hw + btnGap, y, hw, btnHeight, () -> Gdx.app.exit()));
+        main.add(addButton(mainPanel, "THOÁT", null, "Thoát game.", hw + btnGap, y, hw, btnHeight, () -> Main.exitGame()));
         panelButtons.put(mainPanel, main);
 
         // ===== Bảng "Chơi mạng" =====

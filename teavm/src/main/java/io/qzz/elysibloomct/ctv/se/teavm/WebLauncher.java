@@ -2,6 +2,7 @@ package io.qzz.elysibloomct.ctv.se.teavm;
 
 import com.github.xpenatan.gdx.teavm.backends.web.WebApplication;
 import com.github.xpenatan.gdx.teavm.backends.web.WebApplicationConfiguration;
+import com.github.xpenatan.gdx.teavm.backends.web.WebPreloadApplicationListener;
 import io.qzz.elysibloomct.ctv.se.Main;
 import io.qzz.elysibloomct.ctv.se.NetworkManager;
 import io.qzz.elysibloomct.ctv.se.PortraitRotation;
@@ -15,6 +16,12 @@ public class WebLauncher {
         // Điện thoại để dọc (khóa xoay) vẫn thấy game nằm ngang.
         PortraitRotation.enabled = true;
 
+        // Nút THOÁT trong game: về trang chủ website (trình duyệt không cho trang tự đóng tab).
+        Main.exitHandler = WebLauncher::goHome;
+
+        // Biểu tượng và tên trên tab trình duyệt (trang do gdx-teavm tạo không có sẵn).
+        setupPageIcon();
+
         // Bảng lưu ý hiện mỗi lần mở bản web; game vẫn tải ngầm phía sau.
         showNotice();
 
@@ -22,7 +29,10 @@ public class WebLauncher {
         config.width = 0;   // 0 = lấp đầy cửa sổ trình duyệt
         config.height = 0;
         config.showDownloadLogs = true;
-        new WebApplication(new Main(), config);
+        // Màn hình tải: logo ElysiBlooMCT thay cho logo libGDX mặc định (đường dẫn tính từ thư mục assets).
+        WebPreloadApplicationListener preload = new WebPreloadApplicationListener();
+        preload.startupLogo = "web_loading_logo.png";
+        new WebApplication(new Main(), preload, config);
     }
 
     @JSBody(script = ""
@@ -70,4 +80,17 @@ public class WebLauncher {
         + "});\n"
     )
     private static native void showNotice();
+
+    @JSBody(script = "window.location.href = '../';")
+    private static native void goHome();
+
+    @JSBody(script = ""
+        + "document.title = 'Shadow Edict: Ám Lệnh – Chơi trên trình duyệt';\n"
+        + "var old = document.querySelectorAll('link[rel~=\\\"icon\\\"]');\n"
+        + "for (var i = 0; i < old.length; i++) old[i].parentNode.removeChild(old[i]);\n"
+        + "var l = document.createElement('link'); l.rel = 'icon'; l.type = 'image/png';\n"
+        + "l.href = '../assets/img/favicon.png'; document.head.appendChild(l);\n"
+        + "var a = document.createElement('link'); a.rel = 'apple-touch-icon';\n"
+        + "a.href = '../assets/img/game-icon.png'; document.head.appendChild(a);\n")
+    private static native void setupPageIcon();
 }

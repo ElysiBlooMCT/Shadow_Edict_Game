@@ -19,6 +19,21 @@ public class Main extends Game {
     public java.util.function.BooleanSupplier micPermissionChecker = null;
     public Runnable micPermissionRequester = null;
 
+    /**
+     * Việc cần làm khi người chơi bấm THOÁT. null = đóng ứng dụng (PC, Android).
+     * Bản web gán hàm quay về trang chủ website, vì trình duyệt không cho trang tự đóng tab.
+     */
+    public static Runnable exitHandler = null;
+
+    /** Thoát game theo cách phù hợp từng nền tảng. */
+    public static void exitGame() {
+        if (exitHandler != null) {
+            exitHandler.run();
+        } else {
+            Gdx.app.exit();
+        }
+    }
+
     @Override
     public void create() {
         // Cho phép duyệt lồng Array của libGDX bằng for-each (an toàn, code chính dùng vòng for chỉ số)
