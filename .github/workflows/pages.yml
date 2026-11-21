@@ -36,7 +36,18 @@ jobs:
         run: |
           chmod +x gradlew
           V=$(grep '^projectVersion=' gradle.properties | cut -d= -f2 | tr -d '\r ')
-          ./gradlew --console=plain -Pweb -PprojectVersion=$V teavm:gdx_teavm_web_js_release_build
+          # Maven Central đôi khi từ chối tạm thời (giới hạn lượt tải) -> thử lại tối đa 3 lần
+          ok=0
+          for i in 1 2 3; do
+            if ./gradlew --console=plain -Pweb -PprojectVersion=$V teavm:gdx_teavm_web_js_release_build; then ok=1; break; fi
+            echo "::warning::Lần build $i lỗi, thử lại sau 30 giây..."
+            sleep 30
+          done
+          if [ $ok -ne 1 ]; then
+            echo "== Chi tiết lỗi tải thư viện =="
+            ./gradlew --console=plain --info -Pweb help 2>&1 | grep -iE "could not|status code|unauthorized|forbidden|too many|timed out|refused" | head -40 || true
+            exit 1
+          fi
           IDX=$(find teavm/build/dist -name index.html | head -1)
           if [ -z "$IDX" ]; then echo "::error::Không thấy index.html trong teavm/build/dist"; find teavm/build/dist | head -50; exit 1; fi
           echo "dir=$(dirname "$IDX")" >> "$GITHUB_OUTPUT"
