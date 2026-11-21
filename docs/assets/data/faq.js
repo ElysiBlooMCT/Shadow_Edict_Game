@@ -6,12 +6,16 @@ SITE.faq = {
   title: "FAQ nhanh",
   items: [
     {
+      q: "Chơi trên trình duyệt có vào chung phòng với điện thoại không?",
+      a: "Có. Bản web, Android và máy tính dùng chung một máy chủ, tạo phòng ở máy nào cũng mời được người chơi ở máy khác. Riêng đàm thoại micro chưa có trên web.",
+    },
+    {
       q: "Game có miễn phí không?",
       a: "Có. {name} là dự án học tập, phi thương mại, tải và chơi miễn phí.",
     },
     {
       q: "Có bản cho iPhone / iPad không?",
-      a: "Chưa. Hiện có bản Android (7.0 trở lên), Windows, macOS và Linux.",
+      a: "Chưa có bản cài riêng, nhưng chơi được ngay trên trình duyệt Safari ở trang **Tải game** → **Chơi trên trình duyệt**.",
     },
     {
       q: "Cập nhật bản mới thế nào?",

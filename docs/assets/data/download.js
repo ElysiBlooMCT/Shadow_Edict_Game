@@ -6,6 +6,7 @@
   platforms: mỗi thẻ là một nền tảng.
     - suffix: đuôi tên file trong Release (phải khớp tên file mà GitHub Actions tạo ra)
     - os: để đánh dấu "Máy của bạn" (android, windows, mac-arm, linux)
+    - url: thẻ dẫn thẳng tới một trang (không lấy file từ Release), dùng cho bản chơi trên trình duyệt
   guides: hướng dẫn cài, viết giống mục Tham gia của web Minecraft.
   Trong ready: {version} = số phiên bản, {date} = ngày phát hành.
 */
@@ -16,8 +17,9 @@ SITE.download = {
   ready: "Phiên bản {version} · phát hành ngày {date}. Bấm vào nền tảng để tải.",
   failed: "Không lấy được thông tin tự động. Xem tất cả file tại",
   allVersions: "trang Releases",
-  iosNote: "Hiện chưa có bản cho iPhone / iPad.",
+  iosNote: "iPhone / iPad: chơi bằng thẻ “Chơi trên trình duyệt” (chưa có bản cài riêng).",
   platforms: [
+    { icon: "✦", name: "Chơi trên trình duyệt", text: "Không cần cài · máy tính, điện thoại, iPhone", url: "/play/", os: "ios" },
     { icon: "◆", name: "Android", text: "APK · Android 7.0 trở lên", suffix: "-android.apk", os: "android" },
     { icon: "✦", name: "Windows", text: "64-bit · chạy ShadowEdict.exe", suffix: "-windows-x64.zip", os: "windows" },
     { icon: "✧", name: "macOS Apple Silicon", text: "Mac chip M1, M2, M3…", suffix: "-macos-apple-silicon.zip", os: "mac-arm" },
@@ -26,6 +28,14 @@ SITE.download = {
     { icon: "✧", name: "Bản JAR", text: "Mọi máy đã cài Java 11+", suffix: "-all-platforms.jar", os: "jar" },
   ],
   guides: [
+    {
+      name: "Trình duyệt",
+      steps: [
+        "Bấm **Chơi trên trình duyệt** và đợi tải xong (lần đầu khá lâu, các lần sau nhanh hơn).",
+        "Chơi được cả online, vào chung phòng với người chơi điện thoại và máy tính.",
+        "Bản web chưa có đàm thoại micro, vẫn chat chữ bình thường. Nên dùng Chrome, Edge, Firefox hoặc Safari bản mới.",
+      ],
+    },
     {
       name: "Android",
       steps: [

@@ -4,7 +4,9 @@ import com.badlogic.gdx.Application;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Preferences;
 
-import java.util.UUID;
+import com.badlogic.gdx.math.MathUtils;
+
+import java.util.function.Supplier;
 
 /**
  * Định danh cố định cho từng máy, KHÔNG cần tạo tài khoản.
@@ -16,11 +18,16 @@ import java.util.UUID;
  *   (không mất khi xóa/cài lại bản .jar).
  *
  * Server dùng định danh này để cấp lại đúng mã AL-XXXX cũ cho máy.
- * Gọi qua reflection để module core không phụ thuộc thư viện Android.
+ * ANDROID_ID do AndroidLauncher cung cấp qua {@link #androidIdProvider} (core không phụ thuộc thư viện Android,
+ * và không dùng reflection để bản web TeaVM dịch được).
+ * - Web: UUID ngẫu nhiên lưu trong localStorage của trình duyệt.
  */
 public final class DeviceIdentity {
     private static final String PREF_NAME = "AssassinsLegend_Device";
     private static String cached;
+
+    /** AndroidLauncher gán hàm đọc Settings.Secure.ANDROID_ID. Các nền tảng khác để null. */
+    public static Supplier<String> androidIdProvider;
 
     private DeviceIdentity() {}
 
@@ -33,8 +40,9 @@ public final class DeviceIdentity {
         }
         String id = null;
         try {
-            if (Gdx.app != null && Gdx.app.getType() == Application.ApplicationType.Android) {
-                id = readAndroidId();
+            if (androidIdProvider != null && Gdx.app != null
+                && Gdx.app.getType() == Application.ApplicationType.Android) {
+                id = androidIdProvider.get();
             }
         } catch (Throwable t) {
             Gdx.app.error("DeviceIdentity", "Khong doc duoc ANDROID_ID", t);
@@ -49,28 +57,32 @@ public final class DeviceIdentity {
         return id;
     }
 
-    /** Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID) qua reflection. */
-    private static String readAndroidId() throws Exception {
-        Object context = Gdx.app; // AndroidApplication kế thừa Activity (là một Context)
-        Object resolver = context.getClass().getMethod("getContentResolver").invoke(context);
-        Class<?> resolverClass = Class.forName("android.content.ContentResolver");
-        Class<?> secure = Class.forName("android.provider.Settings$Secure");
-        return (String) secure.getMethod("getString", resolverClass, String.class)
-            .invoke(null, resolver, "android_id");
-    }
-
     private static String readOrCreateLocalUuid() {
         try {
             Preferences prefs = Gdx.app.getPreferences(PREF_NAME);
             String uuid = prefs.getString("deviceUuid", "");
             if (uuid.isEmpty()) {
-                uuid = UUID.randomUUID().toString();
+                uuid = randomUuid();
                 prefs.putString("deviceUuid", uuid);
                 prefs.flush();
             }
             return uuid;
         } catch (Exception e) {
-            return UUID.randomUUID().toString();
+            return randomUuid();
         }
+    }
+
+    /** UUID ngẫu nhiên dạng chuẩn 8-4-4-4-12 (không dùng java.util.UUID để chạy được trên web). */
+    static String randomUuid() {
+        final String hex = "0123456789abcdef";
+        StringBuilder sb = new StringBuilder(36);
+        for (int i = 0; i < 32; i++) {
+            if (i == 8 || i == 12 || i == 16 || i == 20) sb.append('-');
+            int v = MathUtils.random(15);
+            if (i == 12) v = 4;                    // phiên bản 4
+            if (i == 16) v = 8 | (v & 3);          // biến thể RFC 4122
+            sb.append(hex.charAt(v));
+        }
+        return sb.toString();
     }
 }

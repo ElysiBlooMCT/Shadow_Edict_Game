@@ -559,7 +559,7 @@ public class MainMenuScreen extends ScreenAdapter implements NetworkManager.Frie
         }
         if (progressBar != null) progressBar.value = p.maxUnlockedLevel / (float) PlayerProfile.MAX_LEVEL;
         if (lblBest != null) {
-            String gold = String.format(java.util.Locale.US, "%,d", p.gold).replace(',', '.');
+            String gold = TextFmt.groupThousands(p.gold);
             lblBest.setText((p.bestScore > 0 ? "Kỷ lục: " + p.bestScore + " điểm" : "Chưa có kỷ lục") + "   •   Vàng: " + gold);
         }
     }

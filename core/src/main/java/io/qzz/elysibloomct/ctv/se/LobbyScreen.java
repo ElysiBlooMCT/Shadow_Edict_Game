@@ -16,7 +16,6 @@ import com.badlogic.gdx.scenes.scene2d.ui.TextField;
 import com.badlogic.gdx.utils.Align;
 import com.badlogic.gdx.utils.Scaling;
 import com.badlogic.gdx.utils.viewport.FitViewport;
-import io.socket.client.Socket;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -37,7 +36,7 @@ public class LobbyScreen extends ScreenAdapter {
     private final boolean coopMode;
     private final String modeKey;
     private Stage stage;
-    private Socket socket;
+    private GameSocket socket;
 
     private Label lblRoomInfo, lblStatus, lblNet;
     private Label lblP1Status, lblP2Status;

@@ -1,0 +1,41 @@
+// Bản chạy trên trình duyệt (gdx-teavm). Chỉ được nạp khi có -Pweb (xem settings.gradle).
+// Build: gradlew -Pweb teavm:gdx_teavm_web_js_release_build
+// Kết quả nằm trong teavm/build/dist/js/release (mở bằng web server, không mở trực tiếp file).
+plugins {
+  id 'com.github.xpenatan.gdx-teavm' version '1.6.2'
+}
+
+eclipse.project.name = appName + '-teavm'
+java.sourceCompatibility = 17
+java.targetCompatibility = 17
+
+dependencies {
+  implementation "com.badlogicgames.gdx:gdx:$gdxVersion"
+  // Box2D bản Java thuần (của backend GWT), TeaVM dịch được; bản gốc dùng mã C qua JNI nên không chạy trên web.
+  implementation "com.badlogicgames.gdx:gdx-box2d-gwt:$gdxVersion"
+  implementation(project(':core')) {
+    // socket.io bản Java + OkHttp không chạy trong trình duyệt: web dùng WebGameSocket (socket.io JS).
+    // org.json thay bằng bản rút gọn không reflection trong teavm/src/main/java/org/json.
+    exclude group: 'io.socket'
+    exclude group: 'org.json'
+    exclude group: 'com.squareup.okhttp3'
+    exclude group: 'com.squareup.okio'
+  }
+}
+
+gdxTeaVM {
+  assets.from(rootProject.files('assets'))
+
+  webDefaults {
+    mainClass.set('io.qzz.elysibloomct.ctv.se.teavm.WebLauncher')
+    htmlTitle.set('Shadow Edict: Ám Lệnh')
+  }
+
+  // Chạy thử trên máy: gradlew -Pweb teavm:gdx_teavm_web_js_run (tự mở web server, xem địa chỉ trong log)
+  js {}
+
+  // Bản phát hành (GitHub Actions dùng bản này)
+  js('release') {
+    obfuscated.set(true)
+  }
+}

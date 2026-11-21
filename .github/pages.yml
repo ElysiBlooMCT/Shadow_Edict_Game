@@ -1,0 +1,70 @@
+# Đăng website (thư mục docs/) + bản game chơi trên trình duyệt (/play/) lên GitHub Pages.
+# Cần đổi một lần: Settings → Pages → Build and deployment → Source: "GitHub Actions".
+# Tên miền riêng (shadow.elysibloomct.qzz.io) vẫn giữ nguyên trong Settings → Pages.
+name: Website & Web game
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['server/**', '*.md', '.gitignore']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Lỗi build bản web KHÔNG chặn việc đăng website: trang vẫn lên, chỉ thiếu /play/.
+      - name: Build bản web (gdx-teavm)
+        id: web
+        continue-on-error: true
+        run: |
+          chmod +x gradlew
+          V=$(grep '^projectVersion=' gradle.properties | cut -d= -f2 | tr -d '\r ')
+          ./gradlew --console=plain -Pweb -PprojectVersion=$V teavm:gdx_teavm_web_js_release_build
+          IDX=$(find teavm/build/dist -name index.html | head -1)
+          if [ -z "$IDX" ]; then echo "::error::Không thấy index.html trong teavm/build/dist"; find teavm/build/dist | head -50; exit 1; fi
+          echo "dir=$(dirname "$IDX")" >> "$GITHUB_OUTPUT"
+          echo "Bản web: $(dirname "$IDX")"; ls -la "$(dirname "$IDX")"
+
+      - name: Gộp website + bản web
+        run: |
+          mkdir -p _site
+          cp -r docs/. _site/
+          rm -f _site/AGENTS.md _site/AI-LOG.md
+          if [ "${{ steps.web.outcome }}" = "success" ] && [ -n "${{ steps.web.outputs.dir }}" ]; then
+            mkdir -p _site/play
+            cp -r "${{ steps.web.outputs.dir }}/." _site/play/
+            du -sh _site/play
+          else
+            echo "::warning::Build bản web lỗi -> website vẫn được đăng nhưng chưa có /play/. Xem log bước 'Build bản web'."
+          fi
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

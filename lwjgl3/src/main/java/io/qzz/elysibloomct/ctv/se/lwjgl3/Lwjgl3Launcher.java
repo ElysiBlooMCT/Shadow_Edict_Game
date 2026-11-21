@@ -2,12 +2,15 @@ package io.qzz.elysibloomct.ctv.se.lwjgl3;
 
 import com.badlogic.gdx.backends.lwjgl3.Lwjgl3Application;
 import com.badlogic.gdx.backends.lwjgl3.Lwjgl3ApplicationConfiguration;
+import io.qzz.elysibloomct.ctv.se.JavaGameSocket;
 import io.qzz.elysibloomct.ctv.se.Main;
+import io.qzz.elysibloomct.ctv.se.NetworkManager;
 
 /** Launches the desktop (LWJGL3) application. */
 public class Lwjgl3Launcher {
     public static void main(String[] args) {
         if (StartupHelper.startNewJvmIfRequired()) return; // This handles macOS support and helps on Windows.
+        NetworkManager.socketFactory = JavaGameSocket::create; // kết nối online bằng socket.io bản Java
         createApplication();
     }
 

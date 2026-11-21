@@ -263,9 +263,13 @@ function renderDownload(data) {
     const cards = [];
     (data.platforms || []).forEach(platform => {
         const card = el("a", "card dl-card");
-        card.href = RELEASE.page();
-        card.target = "_blank";
-        card.rel = "noopener noreferrer";
+        if (platform.url) {
+            card.href = siteUrl(platform.url);
+        } else {
+            card.href = RELEASE.page();
+            card.target = "_blank";
+            card.rel = "noopener noreferrer";
+        }
         const icon = el("span", "card-icon", platform.icon || "✦");
         icon.setAttribute("aria-hidden", "true");
         const body = el("span", "dl-body");

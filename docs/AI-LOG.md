@@ -4,6 +4,20 @@ Quy tắc: sau MỖI lần sửa, thêm một mục mới **lên trên cùng**. 
 
 ---
 
+## 2026-11-21 | Claude (bảng lưu ý + xoay ngang trên web)
+- Đã làm (phần game, không phải web tĩnh): bản web hiện bảng lưu ý mỗi lần mở (tải ~100 MB, chưa có micro, lưu trong trình duyệt, chạy chậm hơn, tự xoay ngang) với nút Tải ứng dụng -> ../download/; điện thoại để dọc thì game tự vẽ nằm ngang (PortraitRotation). Không sửa file nào trong docs.
+- File: `core/.../Main.java`, `core/.../PortraitRotation.java`, `teavm/.../WebLauncher.java`.
+- Còn dang dở: build thử bản web.
+
+---
+
+## 2026-11-21 | Claude (bản chơi trên trình duyệt)
+- Đã làm: thêm thẻ "Chơi trên trình duyệt" (`/play/`) đầu trang Tải game và nút ở trang chủ; hỗ trợ `url` cho thẻ tải trong `assets/script.js`; hướng dẫn chơi web; FAQ chơi chung web với điện thoại, iPhone chơi qua trình duyệt; `?v=20261121a`. Kiểm tra 1280px và 360px không tràn, không lỗi JS.
+- File: `assets/script.js`, `assets/data/download.js`, `assets/data/faq.js`, `index.html`, mọi `*.html`, `AGENTS.md`.
+- Còn dang dở: chuyển Settings → Pages → Source sang GitHub Actions; `/play/` chỉ có khi job build web trong `pages.yml` chạy thành công.
+
+---
+
 ## 2026-11-18 | Claude (thêm ảnh, dòng AI)
 - Đã làm: chụp 12 ảnh game (menu, 3 màn cốt truyện, thoại, 5v5, chọn sát thủ, chọn màn, tiệm đồ, sảnh 5v5, 1v1) vào `assets/img/shots/`; module mới `gallery` (trang `/gallery/`, 6 ảnh ở trang chủ, bấm xem ảnh lớn, phím trái/phải chuyển ảnh); thẻ chế độ chơi có ảnh; menu thêm mục Hình ảnh; chân trang thêm dòng ghi chú dùng AI hỗ trợ (`note` trong `footer.js`); `?v=20261118c`. Kiểm tra 1280px và 360px không tràn, không lỗi JS.
 - File: `assets/script.js`, `assets/styles.css`, `assets/data/gallery.js` (mới), `modes.js`, `footer.js`, `site.js`, `index.html`, `gallery/index.html` (mới), mọi `*.html`.

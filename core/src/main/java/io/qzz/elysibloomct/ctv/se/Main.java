@@ -51,7 +51,13 @@ public class Main extends Game {
     @Override
     public void setScreen(Screen next) {
         final Screen old = getScreen();
-        super.setScreen(next);
+        // Đang xoay (màn hình dọc): màn mới phải thấy kích thước ngang ngay khi show()/resize()
+        PortraitRotation.begin();
+        try {
+            super.setScreen(next);
+        } finally {
+            PortraitRotation.end();
+        }
         if (old != null && old != next) {
             Gdx.app.postRunnable(() -> {
                 try {
@@ -60,6 +66,40 @@ public class Main extends Game {
                     Gdx.app.error("Main", "Loi khi giai phong man hinh cu", e);
                 }
             });
+        }
+    }
+
+    /** Màn hình dọc (web trên điện thoại khóa xoay): báo cho màn hình kích thước ngang, xem PortraitRotation. */
+    @Override
+    public void resize(int width, int height) {
+        if (PortraitRotation.update(width, height) && PortraitRotation.isActive()) {
+            PortraitRotation.guardInputProcessor();
+            PortraitRotation.begin();
+            try {
+                super.resize(PortraitRotation.landscapeWidth(), PortraitRotation.landscapeHeight());
+            } finally {
+                PortraitRotation.end();
+            }
+        } else {
+            PortraitRotation.releaseInputProcessor();
+            super.resize(width, height);
+        }
+    }
+
+    @Override
+    public void render() {
+        if (!PortraitRotation.isActive()) {
+            super.render();
+            return;
+        }
+        PortraitRotation.guardInputProcessor();
+        PortraitRotation.beginFrame();
+        PortraitRotation.begin();
+        try {
+            super.render();
+        } finally {
+            PortraitRotation.end();
+            PortraitRotation.endFrame();
         }
     }
 
@@ -72,5 +112,6 @@ public class Main extends Game {
         SoundManager.getInstance().dispose();
         GameAssets.disposeAll();
         UiKit.dispose();
+        PortraitRotation.dispose();
     }
 }

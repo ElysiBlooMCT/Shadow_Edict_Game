@@ -15,7 +15,6 @@ import com.badlogic.gdx.scenes.scene2d.ui.Table;
 import com.badlogic.gdx.scenes.scene2d.ui.TextButton;
 import com.badlogic.gdx.utils.Align;
 import com.badlogic.gdx.utils.Scaling;
-import io.socket.client.Socket;
 import org.json.JSONObject;
 
 /**
@@ -240,7 +239,7 @@ public class PlayerProfileDialog {
         if (!nm.isConnected() || nm.socket == null) return;
 
         // Đăng ký nhận dữ liệu phản hồi một lần
-        Socket s = nm.socket;
+        GameSocket s = nm.socket;
         s.once("userProfileData", args -> Gdx.app.postRunnable(() -> {
             if (dismissed || args == null || args.length == 0 || !(args[0] instanceof JSONObject)) return;
             JSONObject data = (JSONObject) args[0];

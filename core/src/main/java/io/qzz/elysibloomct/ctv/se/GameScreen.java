@@ -34,7 +34,6 @@ import com.badlogic.gdx.utils.Align;
 import com.badlogic.gdx.utils.Array;
 import com.badlogic.gdx.utils.viewport.FitViewport;
 import com.badlogic.gdx.utils.viewport.Viewport;
-import io.socket.client.Socket;
 import org.json.JSONObject;
 
 public class GameScreen implements Screen {
@@ -580,8 +579,8 @@ public class GameScreen implements Screen {
         float respawnTimer = 0f;
     }
 
-    private Socket socket;
-    private final String myNetId = java.util.UUID.randomUUID().toString().substring(0, 8);
+    private GameSocket socket;
+    private final String myNetId = DeviceIdentity.randomUuid().substring(0, 8);
     private String primaryRemoteId = "";
     private float remoteX = -999f, remoteY = -999f;
     private float targetRemoteX = -999f, targetRemoteY = -999f;
@@ -7091,7 +7090,7 @@ public class GameScreen implements Screen {
         }
 
         if (skillCooldowns[slot] > 0f) {
-            actionLog.setText("Chiêu " + (slot + 1) + " đang hồi (" + String.format(java.util.Locale.US, "%.1f", skillCooldowns[slot]) + "s)!");
+            actionLog.setText("Chiêu " + (slot + 1) + " đang hồi (" + TextFmt.oneDecimal(skillCooldowns[slot]) + "s)!");
             return;
         }
 
@@ -7265,11 +7264,11 @@ public class GameScreen implements Screen {
                     if (isP2 && s == 1 && p2SwapAvailableTimer > 0f) {
                         btn.setStyle(skillReadyStyleP2);
                         btn.setText("HOÁN ĐỔI (" + (isDesktopPlatform() ? "X/O" : "X") + ")\n"
-                            + String.format(java.util.Locale.US, "%.1fs", p2SwapAvailableTimer));
+                            + (TextFmt.oneDecimal(p2SwapAvailableTimer) + "s"));
                     } else if (!isP2 && s == 0 && p1AwakenedTimer > 0f) {
                         btn.setStyle(skillReadyStyleP1);
                         btn.setText("CUỒNG PHONG (" + keyHint + ")\n"
-                            + String.format(java.util.Locale.US, "%.1fs", p1AwakenedTimer));
+                            + (TextFmt.oneDecimal(p1AwakenedTimer) + "s"));
                     } else {
                         String name = !isP2
                             ? (s == 0 ? "PHONG NHẪN" : (s == 1 ? "LÔI PHONG" : "VẠN KIẾM"))
@@ -7628,7 +7627,7 @@ public class GameScreen implements Screen {
         if (playerDead || isAssassinating || isDashing || dashTime > 0 || isClimbing
             || isEagleStriking || isMatchEnded || isGrabbedByPirate || playerStunTimer > 0 || inCutscene()) return;
         if (dashCooldownTimer > 0) {
-            actionLog.setText("Lướt đang hồi chiêu (" + String.format(java.util.Locale.US, "%.1f", dashCooldownTimer) + "s)!");
+            actionLog.setText("Lướt đang hồi chiêu (" + TextFmt.oneDecimal(dashCooldownTimer) + "s)!");
             return;
         }
 
@@ -12112,8 +12111,7 @@ public class GameScreen implements Screen {
     /** Bỏ dấu tiếng Việt cho chữ vẽ bằng font cũ trong thế giới game (font đó không có ký tự có dấu). */
     private static String noAccent(String s) {
         if (s == null) return "";
-        String n = java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD).replaceAll("\\p{M}+", "");
-        return n.replace('Đ', 'D').replace('đ', 'd');
+        return TextFmt.removeVietnameseAccents(s);
     }
 
     /** Vẽ chữ có bóng đổ, căn giữa theo x. */

@@ -5,7 +5,6 @@ import com.badlogic.gdx.audio.AudioDevice;
 import com.badlogic.gdx.audio.AudioRecorder;
 import com.badlogic.gdx.utils.Array;
 import com.badlogic.gdx.utils.Base64Coder;
-import io.socket.client.Socket;
 import org.json.JSONObject;
 
 import java.util.concurrent.ArrayBlockingQueue;
@@ -80,7 +79,7 @@ public class OnlineCommsManager {
         addEntry(new ChatEntry(name, myTeam, clean, true), false);
 
         NetworkManager nm = NetworkManager.getInstance();
-        Socket socket = nm.socket;
+        GameSocket socket = nm.socket;
         if (nm.isConnected() && socket != null && !nm.currentRoomCode.isEmpty()) {
             try {
                 JSONObject pkt = new JSONObject();
@@ -118,7 +117,16 @@ public class OnlineCommsManager {
     }
 
     /** Bật/tắt chế độ thu âm rảnh tay. Trả về chuỗi thông báo cho HUD. */
+    /** Trình duyệt (bản web) chưa hỗ trợ thu/phát âm thanh trực tiếp: tắt đàm thoại micro, vẫn giữ chat chữ. */
+    public static boolean isVoiceSupported() {
+        return Gdx.app == null || Gdx.app.getType() != com.badlogic.gdx.Application.ApplicationType.WebGL;
+    }
+
     public String toggleMic() {
+        if (!isVoiceSupported()) {
+            micEnabled = false;
+            return "Bản trình duyệt chưa hỗ trợ đàm thoại Micro – hãy dùng chat chữ.";
+        }
         if (micEnabled) {
             micEnabled = false;
             localSpeaking = false;
@@ -133,6 +141,7 @@ public class OnlineCommsManager {
     }
 
     public void setPushToTalk(boolean held) {
+        if (!isVoiceSupported()) return;
         if (held && !pushToTalkHeld) {
             if (!ensureMicPermission()) return;
             pushToTalkHeld = true;
@@ -232,7 +241,7 @@ public class OnlineCommsManager {
 
     private void sendVoicePacket(short[] pcm, byte[] ulawOut) {
         NetworkManager nm = NetworkManager.getInstance();
-        Socket socket = nm.socket;
+        GameSocket socket = nm.socket;
         if (!nm.isConnected() || socket == null || nm.currentRoomCode.isEmpty()) return;
 
         for (int i = 0; i < CHUNK_SAMPLES; i++) {
@@ -253,6 +262,7 @@ public class OnlineCommsManager {
     }
 
     public void onIncomingVoice(String sender, String base64Ulaw) {
+        if (!isVoiceSupported()) return;
         if (disposed || base64Ulaw == null || base64Ulaw.isEmpty()) return;
         try {
             byte[] ulaw = Base64Coder.decode(base64Ulaw);

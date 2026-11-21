@@ -1,3 +1,10 @@
+pluginManagement {
+  repositories {
+    gradlePluginPortal()
+    mavenCentral()
+    maven { url = 'https://central.sonatype.com/repository/maven-snapshots/' }
+  }
+}
 plugins {
   // Applies the foojay-resolver plugin to allow automatic download of JDKs.
   id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
@@ -6,3 +13,8 @@ plugins {
 // You can remove Strings from the list and reload the Gradle project
 // if you want to temporarily disable a subproject.
 include 'core', 'android', 'lwjgl3'
+// Bản web (gdx-teavm) chỉ nạp khi chạy với -Pweb, để build APK / PC không phụ thuộc plugin web.
+// Ví dụ: gradlew -Pweb teavm:gdx_teavm_web_js_run
+if (providers.gradleProperty('web').isPresent()) {
+  include 'teavm'
+}

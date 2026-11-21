@@ -1,9 +1,6 @@
 package io.qzz.elysibloomct.ctv.se;
 
 import com.badlogic.gdx.Gdx;
-import io.socket.client.IO;
-import io.socket.client.Socket;
-import io.socket.engineio.client.transports.WebSocket;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -14,7 +11,12 @@ public class NetworkManager {
     private static NetworkManager instance;
     /** Địa chỉ server Socket.IO (Oracle Cloud của nhóm). */
     public static final String SERVER_URL = System.getProperty("al.server", "https://game.elysibloomct.qzz.io");
-    public Socket socket;
+    /**
+     * Cách tạo kết nối của từng nền tảng: PC/Android gán JavaGameSocket::create, web gán WebGameSocket::new.
+     * Phải gán trước khi NetworkManager.getInstance() được gọi lần đầu.
+     */
+    public static GameSocket.Factory socketFactory;
+    public GameSocket socket;
 
     // Lưu thông tin phòng & nhân vật
     public String currentRoomCode = "";
@@ -186,16 +188,12 @@ public class NetworkManager {
                 playerName = PlayerProfile.getInstance().playerName;
             }
 
-            IO.Options options = new IO.Options();
-            options.transports = new String[] { WebSocket.NAME };
-            options.reconnection = true;
-            options.reconnectionAttempts = Integer.MAX_VALUE; // tự kết nối lại suốt phiên chơi
-            options.reconnectionDelayMax = 8000;
-            options.reconnectionDelay = 1000;
-            options.timeout = 5000;
-
-            // Kết nối thẳng tới server Oracle của nhóm
-            socket = IO.socket(SERVER_URL, options);
+            if (socketFactory == null) {
+                System.out.println("NetworkManager: Nen tang nay chua gan socketFactory -> choi offline.");
+                return;
+            }
+            // Kết nối tới server game (qua Cloudflare)
+            socket = socketFactory.create(SERVER_URL);
 
             socket.on("serverInfo", args -> {
                 try {
@@ -208,7 +206,7 @@ public class NetworkManager {
                 } catch (Exception ignored) {}
             });
 
-            socket.on(Socket.EVENT_CONNECT, args -> {
+            socket.on(GameSocket.EVENT_CONNECT, args -> {
                 connectedAtMs = System.currentTimeMillis();
                 serverProtocol = 0;
                 System.out.println("NetworkManager: Connected to Oracle server successfully via WebSocket!");
@@ -225,9 +223,9 @@ public class NetworkManager {
                         socket.emit("getRoomState");
                     } catch (Exception ignored) {}
                 }
-            }).on(Socket.EVENT_CONNECT_ERROR, args -> {
+            }).on(GameSocket.EVENT_CONNECT_ERROR, args -> {
                 System.out.println("NetworkManager: Connection error -> " + (args.length > 0 ? args[0] : "Timeout/Server down"));
-            }).on(Socket.EVENT_DISCONNECT, args -> {
+            }).on(GameSocket.EVENT_DISCONNECT, args -> {
                 System.out.println("NetworkManager: Disconnected from server. Trying to reconnect...");
             });
 
@@ -236,7 +234,7 @@ public class NetworkManager {
             socket.connect();
         } catch (Exception e) {
             e.printStackTrace();
-            System.out.println("NetworkManager: Failed to parse URI");
+            System.out.println("NetworkManager: Khong tao duoc ket noi");
         }
     }
 
