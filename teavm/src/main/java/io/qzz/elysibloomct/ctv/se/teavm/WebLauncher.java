@@ -22,6 +22,9 @@ public class WebLauncher {
         // Biểu tượng và tên trên tab trình duyệt (trang do gdx-teavm tạo không có sẵn).
         setupPageIcon();
 
+        // Trang không cuộn và luôn vừa khung nhìn (tránh lệch khi thanh địa chỉ ẩn/hiện).
+        setupPageLayout();
+
         // Bảng lưu ý hiện mỗi lần mở bản web; game vẫn tải ngầm phía sau.
         showNotice();
 
@@ -80,6 +83,38 @@ public class WebLauncher {
         + "});\n"
     )
     private static native void showNotice();
+
+    /**
+     * Cố định trang cho vừa màn hình điện thoại: không cuộn, không kéo-để-tải-lại, và báo game
+     * đổi kích thước khi thanh địa chỉ của trình duyệt (Samsung Internet, Chrome...) ẩn/hiện.
+     */
+    @JSBody(script = ""
+        + "var st = document.createElement('style');\n"
+        + "st.textContent = 'html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#000;'\n"
+        + "  + 'overscroll-behavior:none;-webkit-text-size-adjust:100%;}'\n"
+        + "  + 'body{position:fixed;inset:0;touch-action:none;}'\n"
+        + "  + 'canvas{display:block;touch-action:none;outline:none;}';\n"
+        + "document.head.appendChild(st);\n"
+        + "var vp = document.querySelector('meta[name=viewport]');\n"
+        + "if (!vp) { vp = document.createElement('meta'); vp.name = 'viewport'; document.head.appendChild(vp); }\n"
+        + "vp.content = 'width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover';\n"
+        + "var pending = false;\n"
+        + "function fit() {\n"
+        + "  window.scrollTo(0, 0);\n"
+        + "  if (pending) return;\n"
+        + "  pending = true;\n"
+        + "  setTimeout(function () { pending = false; window.scrollTo(0, 0); window.dispatchEvent(new Event('resize')); }, 120);\n"
+        + "}\n"
+        + "if (window.visualViewport) {\n"
+        + "  window.visualViewport.addEventListener('resize', fit);\n"
+        + "  window.visualViewport.addEventListener('scroll', function () { window.scrollTo(0, 0); });\n"
+        + "}\n"
+        + "window.addEventListener('orientationchange', fit);\n"
+        + "window.addEventListener('pageshow', fit);\n"
+        + "document.addEventListener('fullscreenchange', fit);\n"
+    )
+    private static native void setupPageLayout();
+
 
     @JSBody(script = "window.location.href = '../';")
     private static native void goHome();

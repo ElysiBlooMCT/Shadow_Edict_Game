@@ -4,6 +4,13 @@ Quy tắc: sau MỖI lần sửa, thêm một mục mới **lên trên cùng**. 
 
 ---
 
+## 2026-11-21 | Claude (sửa lệch khung trên Samsung Internet)
+- Đã làm (phần game): trang /play/ khóa cuộn, tắt kéo-để-tải-lại, canvas display:block, viewport cố định; khi thanh địa chỉ ẩn/hiện (visualViewport resize) thì cuộn về 0 và báo game đổi kích thước.
+- File: `teavm/.../WebLauncher.java`.
+- Còn dang dở: thử lại trên Samsung Internet và Chrome Android.
+
+---
+
 ## 2026-11-21 | Claude (logo màn tải bản web)
 - Đã làm (phần game): màn hình tải của bản web dùng logo ElysiBlooMCT (`assets/web_loading_logo.png`, chép từ `docs/assets/logo.png`) thay logo libGDX.
 - File: `teavm/.../WebLauncher.java`, `assets/web_loading_logo.png` (mới).
