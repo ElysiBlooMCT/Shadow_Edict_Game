@@ -4,6 +4,14 @@ Quy tắc: sau MỖI lần sửa, thêm một mục mới **lên trên cùng**. 
 
 ---
 
+## 2026-11-21 | Claude (bàn phím điện thoại trên bản web)
+- Đã làm (phần game): trên web điện thoại, chạm vào ô nhập chữ (đổi tên, tìm bạn, mã phòng, tên 5v5, chat) mở hộp nhập của trình duyệt để hiện bàn phím; bấm OK thì điền chữ (cắt theo độ dài tối đa) và xử lý như bấm Enter. PC, Android, web máy tính không đổi.
+- File: `core/.../TextInputBridge.java` (mới), `Arena5v5LobbyScreen.java`, `LobbyScreen.java`, `FriendsDialog.java`, `GameScreen.java`, `teavm/.../WebLauncher.java`.
+- Kiểm tra: biên dịch core + teavm; chạy thử trên desktop với hộp nhập giả (chạm → hỏi → điền chữ → Enter).
+- Còn dang dở: thử trên Chrome/Samsung Internet điện thoại.
+
+---
+
 ## 2026-11-21 | Claude (sửa lệch khung trên Samsung Internet)
 - Đã làm (phần game): trang /play/ khóa cuộn, tắt kéo-để-tải-lại, canvas display:block, viewport cố định; khi thanh địa chỉ ẩn/hiện (visualViewport resize) thì cuộn về 0 và báo game đổi kích thước.
 - File: `teavm/.../WebLauncher.java`.

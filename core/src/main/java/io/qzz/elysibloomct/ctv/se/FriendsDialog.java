@@ -110,6 +110,7 @@ public class FriendsDialog implements NetworkManager.FriendsUpdateListener {
         nameStyle.messageFont = UiKit.inputFont();
         txtMyName = new TextField(profile.playerName, nameStyle);
         txtMyName.setMaxLength(16);
+        TextInputBridge.attach(txtMyName, "Đổi tên nhân vật");
         txtMyName.setMessageText("Nhập tên...");
         txtMyName.setTextFieldListener((field, c) -> {
             if (c == '\r' || c == '\n') renameMe();
@@ -361,6 +362,7 @@ public class FriendsDialog implements NetworkManager.FriendsUpdateListener {
 
         Table inputRow = new Table();
         final TextField txtSearch = new TextField(searchText, UiKit.textFieldStyle());
+        TextInputBridge.attach(txtSearch, "Tìm bạn: nhập ID (VD: AL-1234) hoặc tên");
         txtSearch.setMessageText("Nhập ID (VD: AL-1234) hoặc tên");
         txtSearch.setTextFieldListener((field, c) -> {
             searchText = field.getText();

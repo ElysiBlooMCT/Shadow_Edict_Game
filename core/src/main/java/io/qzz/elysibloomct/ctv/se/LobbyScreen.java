@@ -126,6 +126,7 @@ public class LobbyScreen extends ScreenAdapter {
         // --- Hàng tạo / vào phòng ---
         TextButton btnCreate = UiKit.button("TẠO PHÒNG (C)", UiKit.GREEN);
         txtRoomCode = new TextField("", UiKit.textFieldStyle());
+        TextInputBridge.attach(txtRoomCode, "Nhập mã phòng");
         txtRoomCode.setMessageText("Mã (Tab)");
         txtRoomCode.setMaxLength(8);
         txtRoomCode.setAlignment(Align.center);

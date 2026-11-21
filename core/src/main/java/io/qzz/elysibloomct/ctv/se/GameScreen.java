@@ -8102,6 +8102,7 @@ public class GameScreen implements Screen {
             chatInputField = new TextField("", UiKit.textFieldStyle());
             chatInputField.setMessageText("Nhập tin nhắn... (Enter gửi • Esc đóng)");
             chatInputField.setMaxLength(120);
+            TextInputBridge.attach(chatInputField, "Nhập tin nhắn");
             chatInputField.setTextFieldListener((textField, c) -> {
                 if (c == '\r' || c == '\n') {
                     submitChatInput();

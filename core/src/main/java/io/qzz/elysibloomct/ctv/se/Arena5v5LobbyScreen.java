@@ -93,6 +93,7 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
         String currentName = (game.playerName != null && !game.playerName.isEmpty()) ? game.playerName : "Chiến Thần";
         txtPlayerName = new TextField(currentName, UiKit.textFieldStyle());
         txtPlayerName.setMaxLength(16);
+        TextInputBridge.attach(txtPlayerName, "Tên của bạn");
         txtPlayerName.setTextFieldListener((f, c) -> {
             updateRosterDisplay(lastOnlinePlayers);
             if (c == '\r' || c == '\n') stage.setKeyboardFocus(null);
@@ -138,6 +139,7 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
         lblRoomInfo = UiKit.label(rCode.isEmpty() ? "PHÒNG TRỰC TUYẾN: --" : ("PHÒNG: " + rCode), UiKit.normal(), UiKit.GOLD);
         TextButton btnCreate = UiKit.button("TẠO PHÒNG (C)", UiKit.BLUE, UiKit.small());
         txtRoomCode = new TextField("", UiKit.textFieldStyle());
+        TextInputBridge.attach(txtRoomCode, "Nhập mã phòng");
         txtRoomCode.setMessageText("Mã (Tab)");
         txtRoomCode.setAlignment(Align.center);
         txtRoomCode.setTextFieldListener((f, c) -> {

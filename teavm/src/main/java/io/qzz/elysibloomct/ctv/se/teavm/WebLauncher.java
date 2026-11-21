@@ -6,6 +6,7 @@ import com.github.xpenatan.gdx.teavm.backends.web.WebPreloadApplicationListener;
 import io.qzz.elysibloomct.ctv.se.Main;
 import io.qzz.elysibloomct.ctv.se.NetworkManager;
 import io.qzz.elysibloomct.ctv.se.PortraitRotation;
+import io.qzz.elysibloomct.ctv.se.TextInputBridge;
 import org.teavm.jso.JSBody;
 
 /** Chạy game trên trình duyệt (gdx-teavm). */
@@ -18,6 +19,11 @@ public class WebLauncher {
 
         // Nút THOÁT trong game: về trang chủ website (trình duyệt không cho trang tự đóng tab).
         Main.exitHandler = WebLauncher::goHome;
+
+        // Điện thoại/máy tính bảng: chạm vào ô nhập chữ sẽ mở hộp nhập của trình duyệt để bàn phím hiện lên.
+        if (isTouchDevice()) {
+            TextInputBridge.prompt = WebLauncher::askText;
+        }
 
         // Biểu tượng và tên trên tab trình duyệt (trang do gdx-teavm tạo không có sẵn).
         setupPageIcon();
@@ -115,6 +121,15 @@ public class WebLauncher {
     )
     private static native void setupPageLayout();
 
+
+    @JSBody(script = "return ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;")
+    private static native boolean isTouchDevice();
+
+    /** Hộp nhập chữ của trình duyệt; trả về null khi bấm Hủy. */
+    @JSBody(params = {"title", "current"}, script = ""
+            + "var r = window.prompt(title, current == null ? '' : current);"
+            + "return (r === null || r === undefined) ? null : String(r);")
+    private static native String askText(String title, String current);
 
     @JSBody(script = "window.location.href = '../';")
     private static native void goHome();
