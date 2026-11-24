@@ -237,6 +237,7 @@ details p { margin: 0.6rem 0 0; }
 .lightbox-close, .lightbox-nav { position: absolute; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 2px solid var(--hot); border-radius: 0.5rem; background: rgba(12, 10, 9, 0.85); color: var(--blush); font: 700 1.6rem/1 var(--font-body); cursor: pointer; }
 .lightbox-close { top: 0.6rem; right: 0.6rem; }
 .lightbox-nav { top: 40%; }
+.lightbox-nav[hidden] { display: none; }
 .lightbox-prev { left: 0.6rem; }
 .lightbox-next { right: 0.6rem; }
 .footer-note { font-size: 0.85rem; opacity: 0.85; }

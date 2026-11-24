@@ -15,16 +15,18 @@ public class FriendInfo {
     public FriendInfo() {}
 
     public FriendInfo(String userId, String name, int level, String status, String roomCode, String mode) {
-        this.userId = userId;
-        this.name = name;
-        this.level = level;
-        this.status = status;
-        this.roomCode = roomCode;
-        this.mode = mode;
+        this.userId = userId != null ? userId : "";
+        this.name = name != null ? name : "";
+        this.level = Math.max(1, level);
+        this.status = (status != null && !status.isEmpty()) ? status : "OFFLINE";
+        this.roomCode = roomCode != null ? roomCode : "";
+        this.mode = mode != null ? mode : "";
     }
 
     public boolean isOnline() {
-        return !"OFFLINE".equalsIgnoreCase(status);
+        return "ONLINE".equalsIgnoreCase(status)
+            || "IN_ROOM".equalsIgnoreCase(status)
+            || "IN_GAME".equalsIgnoreCase(status);
     }
 
     public boolean isAvailableForInvite() {
@@ -44,13 +46,15 @@ public class FriendInfo {
     }
 
     public String getStatusDisplayText() {
+        String safeMode = mode != null ? mode : "";
+        String safeRoom = roomCode != null ? roomCode : "";
         if ("ONLINE".equalsIgnoreCase(status)) {
             return "[ONLINE] Sanh Cho";
         } else if ("IN_ROOM".equalsIgnoreCase(status)) {
-            String m = mode.isEmpty() ? "Phong" : mode.toUpperCase();
-            return "[PHONG #" + roomCode + "] (" + m + ")";
+            String m = safeMode.isEmpty() ? "Phong" : safeMode.toUpperCase();
+            return "[PHONG #" + safeRoom + "] (" + m + ")";
         } else if ("IN_GAME".equalsIgnoreCase(status)) {
-            String m = mode.isEmpty() ? "Tran Dau" : mode.toUpperCase();
+            String m = safeMode.isEmpty() ? "Tran Dau" : safeMode.toUpperCase();
             return "[DANG TRAN] (" + m + ")";
         } else {
             return "[OFFLINE]";

@@ -41,7 +41,7 @@ public class AncientTitan {
     }
 
     public boolean takeDamage(int dmg) {
-        if (!isAlive) return false;
+        if (!isAlive || dmg <= 0) return false;
 
         // Trong thời gian gồng 2s: giảm 85% sát thương
         if (isChargingBerserk) {
@@ -57,16 +57,23 @@ public class AncientTitan {
             isChargingBerserk = true;
             berserkChargeTimer = 2.0f;
             isAttacking = false;
+            attackTimer = 0f;
             attackCooldown = 2.2f;
         }
 
         if (hp <= 0) {
             hp = 0;
             isAlive = false;
+            isAttacking = false;
+            attackTimer = 0f;
+            hitTimer = 0f;
             isBerserk = false;
             isChargingBerserk = false;
             isResting = false;
             berserkTriggered = false;
+            berserkChargeTimer = 0f;
+            berserkAttackTimer = 0f;
+            berserkRestTimer = 0f;
             respawnTimer = 65.0f; // Hồi sinh sau 65 giây
             return true; // Bị hạ gục
         }
@@ -84,10 +91,16 @@ public class AncientTitan {
                 isAlive = true;
                 hp = maxHp;
                 attackCooldown = 2.0f;
+                isAttacking = false;
+                attackTimer = 0f;
+                hitTimer = 0f;
                 isBerserk = false;
                 isChargingBerserk = false;
                 isResting = false;
                 berserkTriggered = false;
+                berserkChargeTimer = 0f;
+                berserkAttackTimer = 0f;
+                berserkRestTimer = 0f;
             }
             return;
         }
@@ -132,18 +145,23 @@ public class AncientTitan {
             attackTimer -= delta;
             if (attackTimer <= 0) {
                 isAttacking = false;
-                float minCd = isBerserk ? 0.9f : 1.8f;
-                float maxCd = isBerserk ? 1.4f : 2.8f;
-                attackCooldown = MathUtils.random(minCd, maxCd);
             }
         }
     }
 
-    public void triggerAttack(int targetFacing) {
-        if (!isAlive || isAttacking || attackCooldown > 0 || isChargingBerserk || isResting) return;
+    public boolean canAttack() {
+        return isAlive && !isAttacking && attackCooldown <= 0 && !isChargingBerserk && !isResting;
+    }
+
+    public boolean triggerAttack(int targetFacing) {
+        if (!canAttack()) return false;
         isAttacking = true;
         attackTimer = isBerserk ? 0.28f : 0.45f; // Tốc độ đánh nhanh hơn khi cuồng huyết
+        float minCd = isBerserk ? 0.9f : 1.8f;
+        float maxCd = isBerserk ? 1.4f : 2.8f;
+        attackCooldown = attackTimer + MathUtils.random(minCd, maxCd);
         this.facing = targetFacing;
+        return true;
     }
 
     public Vector2 getPosition() {

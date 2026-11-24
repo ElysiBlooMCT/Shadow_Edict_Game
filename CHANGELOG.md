@@ -1,5 +1,43 @@
 # CHANGELOG – Assassin's Legend (Heroes of the Void)
 
+## v1.5.3 – Rà soát & sửa lỗi toàn diện (25/11/2026)
+
+Đợt rà soát toàn bộ mã nguồn (`core`, `lwjgl3`, `android`, `teavm`, `server/server.js`, `.github/workflows/release.yml` và website `docs/`), khắc phục hàng loạt lỗi logic chiến đấu, lưu tiến độ, đồng bộ trực tuyến, rò rỉ bộ nhớ và giao diện web.
+
+**1. Lối chơi, Chiến đấu & Cốt truyện (`GameScreen`, `AncientTitan`, `Fighter5v5`)**
+- **Sửa lỗi nhân đôi vàng vô hạn**: chuyển phần vàng chưa ngân hàng hóa sang `PlayerProfile` trước khi lưu checkpoint / qua ải / thoát menu và lưu `savedGold = 0` trong `StorySaveManager`.
+- **Sửa kẹt mềm CO-OP khi gục ngã**: không bật `isMatchEnded = true` hay ghi nhận thua khi đang chờ đồng đội hồi sinh; chỉ kết thúc trận khi cả đội gục hoặc đồng đội thoát phòng; kiểm tra kết nối mạng và thêm hồi chiêu 2 giây cho nút hồi sinh đồng đội.
+- **Hoàn thiện hỗ trợ đa người chơi 5v5 (`extraPeers5v5`)**: mọi đòn đánh/kỹ năng (Tuyệt kỹ P1/P2, Rìu, Song Đao, Kiếm, Lướt, Ưng kích, Ám sát sau lưng, Cung khóa mục tiêu, Vạn Kiếm Quy Tông, Phân Thân Hắc Ám, Hắc Ám Huyết Trận) đều kiểm tra phe (`team != pTeam`) và tác dụng đầy đủ lên mọi người chơi đối thủ trong phòng 5v5.
+- **Sửa lỗi kỹ năng & chiến đấu**:
+  - Bùa `RANDOM_ULTIMATE` trong 5v5 đổi đúng tuyệt kỹ P1/P2 khi nhấn `U`.
+  - Sửa điều kiện đáp đất Tuyệt kỹ P1 (`prevVy` lấy trước khi gán vận tốc rơi `-24`) và lỗi `Fighter5v5` bị ghim hoạt ảnh khi P2 tàng hình.
+  - Sửa `AncientTitan` gây sát thương AoE mỗi khung hình; bổ sung `canAttack()` và kích hoạt cooldown ngay khi ra đòn.
+  - Sửa lỗi Trùm bị khóa choáng vô hạn và bị đè trạng thái khi gồng Cuồng Huyết (`BERSERK_CHARGE`); thêm kiểm tra khoảng cách trục Y cho chiêu Đập đất của Trùm.
+  - Sửa sát thương độc của Vân U áp dụng đúng giảm 85% sát thương khi Trùm gồng, kích hoạt Cuồng Huyết, đồng bộ CO-OP, không gây choáng/nhân đôi chữ sát thương và áp dụng đúng làm chậm người chơi địch (`playerPoisonSlowTimer`).
+  - Sửa lỗi lính gác đánh Tiểu Vũ khi cậu bé chưa được cứu, lính đánh ngược hướng, và tốc độ giảm đà lao phụ thuộc FPS; chặn cộng điểm/vàng quá mức (overkill) khi Ám sát gây 9999 sát thương.
+  - Xóa lỗ hổng hồi chiêu 0,5 giây vô hạn của Phân Thân Hắc Ám khi nổ sớm; cấm Tiệm Đồ và Bình Máu ở đấu 1v1; tránh nhặt hòm vũ khí làm tụt bonus sát thương đã mua ở Tiệm Đồ.
+  - Sửa Ưng kích gọi `stopEagleStrike` trong callback vật lý Box2D và xuyên tường biên bản đồ; đóng băng vật lý, đạn địch và hủy combo khi bị choáng/chết/đọc thoại/mở tiệm đồ chơi đơn.
+  - Bật lại bệ nhảy, bùa tăng lực và bụi rậm (cả logic, hiển thị lẫn minimap) trong chế độ CO-OP; sửa bám mép và đu dây trên điều khiển cảm ứng; sửa vị trí pháo ải 3-3, thang nổi và không cho Tiểu Vũ/quái sinh trong hầm bò ải 1-2.
+  - Sửa thứ tự lớp phủ Pause/GameOver luôn nằm trên Tiệm Đồ & khung Chat; chặn bấm nhầm phím kết thúc trận cùng khung hình đóng thoại cuối ải.
+
+**2. Trực tuyến, Voice/Chat & Máy chủ (`NetworkManager`, `OnlineCommsManager`, `server/server.js`, sảnh chờ)**
+- **Xóa sát thương kép và vòng lặp phản chấn vô hạn**: đạn/phân thân/huyết trận phát lại từ người chơi khác chỉ hiển thị hiệu ứng (sát thương thật đi duy nhất qua gói `"hit"` / `"mobHit"` của chủ chiêu); thêm cờ `noReflect` chống vòng lặp phản chấn giữa hai Vân Tiêu.
+- **Ổn định sảnh chờ & vòng đời màn hình**: chuyển đăng ký listener mạng sang `GameScreen.show()`, gắn cờ `listenersRegistered`/`hidden` ở `LobbyScreen`, `CoopLobbyScreen`, `Arena5v5LobbyScreen` để rời sảnh không xóa nhầm listener `"playerLeft"` của trận đấu; sửa đảo trạng thái Sẵn sàng và lỗi tự gửi đè phe khi vào lại phòng 5v5; đồng bộ `selectedMap`; ẩn bong bóng chat nếu đối thủ 5v5 đang núp bụi.
+- **Voice Chat & Micro**: giải phóng phần cứng `AudioRecorder` sau 0,5 giây tắt/im lặng (tắt đèn micro Android); phát thoại liên tục khi giữ Push-To-Talk (`V`); lọc ký tự xuống dòng và giới hạn kích thước gói chat/voice; giãn tần suất xin quyền micro.
+- **Bảo mật & bền vững máy chủ (`server/server.js`)**: dùng `Object.create(null)` + `hasOwn` cho `rooms`, `online`, `db.users`, `db.deviceIndex` chống lỗi Prototype Pollution; tuần tự hóa ghi `users.json` (khóa `isSaving`/`saveQueued`) và lưu đồng bộ khi nhận `SIGINT`/`SIGTERM`; gộp kết nối lại theo `userId` trước khi kiểm tra phòng đầy; kiểm tra hợp lệ chỉ số trong `registerUser`; bắt buộc đủ 2 người mới được `startGame` ở 1v1/CO-OP; lọc & giới hạn gói `chat`/`voice`.
+
+**3. Hệ thống lõi, Nền tảng (Desktop / Android / Web TeaVM) & Website (`docs/`)**
+- **Khắc phục rò rỉ bộ nhớ & lỗi nền tảng**: quản lý & giải phóng toàn bộ 42 `Pixmap` procedural trong `GameScreen`, `GameAssets`, `MapSelectScreen`; thêm daemon thread cho OkHttp và `System.exit(0)` ở `Lwjgl3Launcher` để thoát game PC dứt điểm không treo tiến trình; tránh rò rỉ Activity context trong `AndroidLauncher` và khai báo `hardware.microphone` `required="false"` trong `AndroidManifest.xml`.
+- **Bản web TeaVM**: thay `window.prompt()` chặn vòng lặp JS (gây ngắt socket 5s) bằng hộp nhập HTML bất đồng bộ trong `WebLauncher`; tinh chỉnh nhận diện cảm ứng bằng `(pointer: coarse)`; tự nạp lại Socket.IO khi lỗi CDN và sửa `JSONObject.optString` / `JSONArray` trên TeaVM; sửa `StorySaveManager.clearSave()` và `SoundManager.reloadMenuBgm()` tương thích hoàn toàn với `gdx-teavm`; sửa `PortraitRotation` khi tạo FBO thất bại hoặc thoát màn hình.
+- **Hệ thống lưu & giao diện**: cô lập lỗi đọc từng khóa trong `PlayerProfile`, không ghi đè tiến độ cốt truyện khi chơi màn tự do, thay thế các ký tự thiếu glyph (`↑ ↓ ► ◄`) trong bộ font bitmap, sửa `UiKit` không thu nhỏ font fallback, cải thiện `FriendsDialog` (giữ vị trí cuộn, tab tìm kiếm và danh sách đã mời) và `PlayerProfileDialog` (gỡ listener khi đóng).
+- **Website `docs/` & CI**: thêm `'docs/**'` vào `paths-ignore` trong `.github/workflows/release.yml`; sửa `detectOs()` nhận diện iPadOS 13+ và không ép tải bản Apple Silicon cho Mac Intel; sửa lightbox (`[hidden]`, kiểm tra `<dialog>`, phím mũi tên với 1 ảnh), fallback khi GitHub API lỗi, chuyển `id="top"` sang `<body id="top">`, dùng URL tuyệt đối cho `og:image`, cập nhật mô tả 5v5/phím điều khiển/chính tả và đồng bộ `?v=20261125a` trên cả 9 file HTML.
+
+**Đã kiểm tra**
+- Biên dịch thành công (0 lỗi): `:core:compileJava`, `:lwjgl3:compileJava`, `:teavm:compileJava` (`-Pweb`) và đóng gói đầy đủ bản web TeaVM (`:teavm:gdx_teavm_web_js_build`).
+- Kiểm tra tự động website `docs/` tuân thủ `docs/AGENTS.md` (không chú thích trong code công khai, `CNAME` nguyên vẹn, `?v=20261125a` trên cả 9 file HTML).
+
+---
+
 ## v1.5 – Gộp bản của nhóm + sửa lỗi chế độ trực tuyến (09/11/2026)
 
 Gộp bản sửa mới nhất của nhóm (thư mục `AssasinsLegend 2`, xây trên v1.4) thành **một thư mục duy nhất**.

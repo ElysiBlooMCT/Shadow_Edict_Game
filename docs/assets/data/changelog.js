@@ -21,6 +21,22 @@ SITE.changelog = {
   title: "Changelog",
   entries: [
     {
+      version: "v1.5.3",
+      title: "Rà soát & sửa lỗi toàn diện",
+      date: "25/11/2026",
+      changes: [
+        ["fix", "Sửa lỗi nhân đôi vàng khi lưu checkpoint hoặc thoát màn trong chế độ **Cốt truyện**."],
+        ["fix", "**Đại chiến 5v5**: toàn bộ kỹ năng, tuyệt kỹ, ám sát, ưng kích và cung khóa mục tiêu hoạt động chuẩn với tất cả đối thủ trong phòng; sửa bùa Tuyệt kỹ ngẫu nhiên không đổi chiêu khi nhấn U."],
+        ["fix", "Xóa lỗi sát thương kép từ đạn/phân thân/huyết trận trực tuyến và vòng lặp phản chấn vô hạn giữa hai Vân Tiêu."],
+        ["fix", "**Hợp tác 2 người**: sửa kẹt màn hình khi chờ hồi sinh; bật lại bệ nhảy, bùa tăng lực và bụi rậm trên bản đồ CO-OP."],
+        ["fix", "Sửa lỗi Trùm bị khóa choáng vô hạn khi gồng Cuồng Huyết, lỗi lính gác đánh Tiểu Vũ trước khi cứu và sửa vị trí pháo/thang ở các màn cốt truyện."],
+        ["fix", "Sửa kẹt sảnh trực tuyến (mất sự kiện thoát phòng, đảo trạng thái Sẵn sàng và lệch phe 5v5); tối ưu máy chủ chống quá tải & lỗi mất dữ liệu khi tắt."],
+        ["fix", "**Bản web**: thay hộp nhập chặn trình duyệt bằng ô nhập nổi bất đồng bộ (không còn bị rớt kết nối khi gõ tên/chat), sửa xóa tiến độ lưu và âm thanh menu."],
+        ["fix", "Giải phóng micro ngay khi tắt thoại trên Android; sửa treo tiến trình khi thoát game trên PC và giải phóng bộ nhớ đồ họa."],
+        ["change", "Cập nhật trang web: nhận diện đúng iPad và macOS Intel/Apple Silicon, cập nhật bảng điều khiển, sửa nút lên đầu trang và trình xem ảnh."],
+      ],
+    },
+    {
       version: "v1.5.2",
       title: "Phát hành trên GitHub",
       date: "18/11/2026",

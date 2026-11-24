@@ -56,27 +56,41 @@ public class LobbyScreen extends ScreenAdapter {
     private boolean p2Joined = false;
     private boolean p2Ready = false;
     private boolean pendingRejoin = false;
+    private String pendingJoinCode = "";
     private boolean hostLegacyReadySent = false;
+    private boolean listenersRegistered = false;
     private boolean leaving = false;
+    private boolean hidden = false;
     private boolean disposed = false;
     private float netCheckTimer = 0f;
     private int baseActorCount = Integer.MAX_VALUE;
     private int warmupFrames = 2;
 
     public LobbyScreen(Main game) {
-        this(game, false);
+        this(game, false, "");
     }
 
     protected LobbyScreen(Main game, boolean coopMode) {
+        this(game, coopMode, "");
+    }
+
+    public LobbyScreen(Main game, boolean coopMode, String pendingJoinCode) {
         this.game = game;
         this.coopMode = coopMode;
         this.modeKey = coopMode ? "coop" : "1v1";
+        this.pendingJoinCode = (pendingJoinCode != null) ? pendingJoinCode.trim() : "";
     }
 
     @Override
     public void show() {
+        hidden = false;
         SoundManager.getInstance().playMenuBgm();
         NetworkManager nm = NetworkManager.getInstance();
+        String profName = PlayerProfile.getInstance().playerName;
+        if (profName != null && !profName.trim().isEmpty()) {
+            game.playerName = profName.trim();
+            nm.playerName = profName.trim();
+        }
         socket = nm.socket;
         nm.ensureConnected();
 
@@ -85,8 +99,12 @@ public class LobbyScreen extends ScreenAdapter {
         buildUI();
         setupSocketEvents();
 
-        // Quay lại từ trận đấu hoặc vào bằng lời mời -> tự vào lại phòng cũ
-        if (!nm.currentRoomCode.isEmpty()) {
+        // Vào bằng lời mời (chưa đặt currentRoomCode cho đến khi server xác nhận) hoặc quay lại phòng cũ
+        if (!pendingJoinCode.isEmpty()) {
+            lblRoomInfo.setText("ĐANG VÀO PHÒNG: " + pendingJoinCode);
+            pendingRejoin = true;
+            tryRejoin();
+        } else if (!nm.currentRoomCode.isEmpty()) {
             lblRoomInfo.setText("MÃ PHÒNG: " + nm.currentRoomCode);
             pendingRejoin = true;
             tryRejoin();
@@ -220,6 +238,7 @@ public class LobbyScreen extends ScreenAdapter {
         UiKit.onClick(btnJoin, this::joinTypedRoom);
         txtRoomCode.setTextFieldListener((field, c) -> {
             if (c == '\r' || c == '\n') {
+                UiKit.consumeModalKey();
                 stage.setKeyboardFocus(null);
                 joinTypedRoom();
             }
@@ -240,12 +259,14 @@ public class LobbyScreen extends ScreenAdapter {
             return;
         }
         if (!nm.currentRoomCode.isEmpty()) nm.leaveRoom();
+        pendingJoinCode = "";
         JSONObject data = new JSONObject();
         try {
             data.put("type", modeKey);
             data.put("name", (game.playerName != null && !game.playerName.isEmpty()) ? game.playerName : "Chiến Thần");
             data.put("team", 1);
             data.put("charId", nm.myCharacter);
+            data.put("selectedMap", nm.selectedMap);
             data.put("userId", PlayerProfile.getInstance().userId);
         } catch (Exception ignored) {}
         socket.emit("createRoom", data);
@@ -355,25 +376,30 @@ public class LobbyScreen extends ScreenAdapter {
 
     private void tryRejoin() {
         NetworkManager nm = NetworkManager.getInstance();
-        if (!pendingRejoin || !nm.isConnected()) return;
+        String targetCode = !pendingJoinCode.isEmpty() ? pendingJoinCode : nm.currentRoomCode;
+        if (!pendingRejoin || !nm.isConnected() || targetCode == null || targetCode.isEmpty()) return;
         pendingRejoin = false;
+        boolean joiningInvite = !pendingJoinCode.isEmpty() && !pendingJoinCode.equals(nm.currentRoomCode);
         JSONObject joinInfo = new JSONObject();
         try {
             joinInfo.put("type", modeKey);
             joinInfo.put("charId", nm.myCharacter);
-            joinInfo.put("team", nm.myPlayerIndex == 2 ? 2 : 1);
+            joinInfo.put("team", joiningInvite ? 2 : (nm.myPlayerIndex == 2 ? 2 : 1));
             joinInfo.put("userId", PlayerProfile.getInstance().userId);
             joinInfo.put("name", (game.playerName != null && !game.playerName.isEmpty()) ? game.playerName : "Chiến Thần");
         } catch (Exception ignored) {}
-        socket.emit("joinRoom", nm.currentRoomCode, joinInfo);
-        socket.emit("selectCharacter", nm.myCharacter);
-        socket.emit("getRoomState");
-        setStatus("Đang đồng bộ phòng " + nm.currentRoomCode + "...", UiKit.WARNING);
+        socket.emit("joinRoom", targetCode, joinInfo);
+        if (!joiningInvite) {
+            socket.emit("selectCharacter", nm.myCharacter);
+            socket.emit("getRoomState");
+        }
+        setStatus((joiningInvite ? "Đang vào phòng " : "Đang đồng bộ phòng ") + targetCode + "...", UiKit.WARNING);
     }
 
     private void leaveToMenu() {
         if (leaving) return;
         leaving = true;
+        hidden = true;
         cleanSocketListeners();
         NetworkManager.getInstance().leaveRoom();
         game.setScreen(new MainMenuScreen(game));
@@ -435,7 +461,8 @@ public class LobbyScreen extends ScreenAdapter {
     }
 
     private void cleanSocketListeners() {
-        if (socket == null) return;
+        if (socket == null || !listenersRegistered) return;
+        listenersRegistered = false;
         for (String ev : ROOM_EVENTS) socket.off(ev);
     }
 
@@ -446,39 +473,41 @@ public class LobbyScreen extends ScreenAdapter {
     private void setupSocketEvents() {
         if (socket == null) return;
         cleanSocketListeners();
+        listenersRegistered = true;
 
         NetworkManager.getInstance().setMatchInviteListener(invite -> MatchInviteDialog.showOn(stage, game, invite));
 
         socket.on("roomCreated", args -> Gdx.app.postRunnable(() -> {
             JSONObject data = asJson(args);
-            if (disposed || data == null) return;
+            if (disposed || hidden || leaving || data == null) return;
             onEnterRoom(data.optString("roomCode", ""), data.optInt("playerIndex", 1));
             setStatus("Tạo phòng thành công! Gửi mã cho " + (coopMode ? "đồng đội." : "đối thủ."), UiKit.SUCCESS);
         }));
 
         socket.on("roomJoined", args -> Gdx.app.postRunnable(() -> {
             JSONObject data = asJson(args);
-            if (disposed || data == null) return;
+            if (disposed || hidden || leaving || data == null) return;
             onEnterRoom(data.optString("roomCode", ""), data.optInt("playerIndex", 2));
             setStatus("Vào phòng thành công! Chọn sát thủ rồi bấm Sẵn sàng.", UiKit.SUCCESS);
         }));
 
         socket.on("updateRoomState", args -> Gdx.app.postRunnable(() -> {
             JSONObject room = asJson(args);
-            if (disposed || room == null) return;
+            if (disposed || hidden || leaving || room == null) return;
             int sMap = room.optInt("selectedMap", 1);
             NetworkManager.getInstance().selectedMap = sMap;
             game.selectedOnlineMap = sMap;
-            updateMapButtonText();
             applyRoomState(room.optJSONArray("players"));
+            updateMapButtonText();
         }));
 
         socket.on("playerJoined", args -> Gdx.app.postRunnable(() -> {
-            if (disposed) return;
+            if (disposed || hidden || leaving) return;
             JSONObject data = asJson(args);
             JSONObject room = data != null ? data.optJSONObject("room") : null;
             if (room != null && room.optJSONArray("players") != null) {
                 applyRoomState(room.optJSONArray("players"));
+                updateMapButtonText();
             }
             JSONObject newP = data != null ? data.optJSONObject("player") : null;
             String joinedName = newP != null ? newP.optString("name", "Người chơi mới") : "Người chơi mới";
@@ -487,7 +516,7 @@ public class LobbyScreen extends ScreenAdapter {
         }));
 
         socket.on("playerLeft", args -> Gdx.app.postRunnable(() -> {
-            if (disposed) return;
+            if (disposed || hidden || leaving) return;
             JSONObject data = asJson(args);
             JSONObject room = data != null ? data.optJSONObject("room") : null;
             if (room != null && room.optJSONArray("players") != null) {
@@ -498,11 +527,12 @@ public class LobbyScreen extends ScreenAdapter {
             isReady = false;
             hostLegacyReadySent = false; // máy chủ đặt lại trạng thái Sẵn sàng của mọi người
             updateReadyButton();
+            updateMapButtonText();
             setStatus("Người chơi đã rời phòng!", UiKit.WARNING);
         }));
 
         socket.on("startGame", args -> Gdx.app.postRunnable(() -> {
-            if (disposed || leaving) return;
+            if (disposed || hidden || leaving) return;
             JSONObject room = asJson(args);
             NetworkManager nm = NetworkManager.getInstance();
             int selectedMap = nm.selectedMap;
@@ -513,6 +543,7 @@ public class LobbyScreen extends ScreenAdapter {
                 selectedMap = room.optInt("selectedMap", nm.selectedMap);
             }
             leaving = true;
+            hidden = true;
             cleanSocketListeners();
             nm.selectedMap = selectedMap;
             game.selectedOnlineMap = selectedMap;
@@ -522,16 +553,30 @@ public class LobbyScreen extends ScreenAdapter {
         }));
 
         socket.on("errorMsg", args -> Gdx.app.postRunnable(() -> {
-            if (disposed) return;
+            if (disposed || hidden || leaving) return;
             String msg = (args != null && args.length > 0 && args[0] != null) ? String.valueOf(args[0]) : "Lỗi không xác định";
+            NetworkManager nm = NetworkManager.getInstance();
+            if (!pendingJoinCode.isEmpty() || msg.contains("không tồn tại") || msg.contains("đã đầy")) {
+                pendingJoinCode = "";
+                if (!nm.currentRoomCode.isEmpty() && msg.contains("không tồn tại")) {
+                    nm.currentRoomCode = "";
+                    nm.currentRoomMode = "";
+                    nm.myPlayerIndex = 1;
+                }
+                lblRoomInfo.setText(nm.currentRoomCode.isEmpty() ? "CHƯA VÀO PHÒNG" : ("MÃ PHÒNG: " + nm.currentRoomCode));
+                updateReadyButton();
+                updateMapButtonText();
+            }
             setStatus(msg, UiKit.DANGER);
         }));
     }
 
     private void onEnterRoom(String roomCode, int playerIndex) {
         if (roomCode == null || roomCode.isEmpty()) return;
+        pendingJoinCode = "";
         NetworkManager nm = NetworkManager.getInstance();
         nm.currentRoomCode = roomCode;
+        nm.currentRoomMode = modeKey;
         nm.myPlayerIndex = playerIndex;
         nm.updateMyPresence("IN_ROOM", roomCode, modeKey);
         lblRoomInfo.setText("MÃ PHÒNG: " + roomCode);
@@ -603,8 +648,8 @@ public class LobbyScreen extends ScreenAdapter {
                 p2Joined = true;
             }
 
-            String pid = p.optString("id", "");
-            String puid = p.optString("userId", "");
+            String pid = p.isNull("id") ? "" : p.optString("id", "");
+            String puid = p.isNull("userId") ? "" : p.optString("userId", "");
             boolean isMe;
             if (!mySockId.isEmpty() && !pid.isEmpty()) {
                 isMe = mySockId.equals(pid);
@@ -739,6 +784,7 @@ public class LobbyScreen extends ScreenAdapter {
      */
     @Override
     public void hide() {
+        hidden = true;
         cleanSocketListeners();
         NetworkManager.getInstance().setMatchInviteListener(null);
     }

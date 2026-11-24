@@ -32,6 +32,7 @@ public class PlayerProfileDialog {
 
     private final Group root = new Group();
     private InputListener keyListener;
+    private NetworkManager.UserProfileListener profileListener;
     private boolean dismissed = false;
 
     // Các thành phần UI có thể cập nhật Realtime từ server
@@ -171,7 +172,7 @@ public class PlayerProfileDialog {
             actions.add(btnAddFriend).size(160, 44).padRight(10);
         }
 
-        if (!isMe && !currentRoomCode.isEmpty()) {
+        if (!isMe && alreadyFriend && !currentRoomCode.isEmpty()) {
             btnInvite = UiKit.button("MỜI VÀO PHÒNG", UiKit.PURPLE);
             UiKit.onClick(btnInvite, () -> {
                 NetworkManager.getInstance().inviteFriendToMatch(targetUserId, currentRoomCode, currentMode);
@@ -193,7 +194,7 @@ public class PlayerProfileDialog {
         keyListener = new InputListener() {
             @Override
             public boolean keyDown(InputEvent event, int keycode) {
-                if (dismissed || root.getStage() == null) return false;
+                if (dismissed || !UiKit.isTopModal(stage, root)) return false;
                 if (keycode == Input.Keys.ESCAPE || keycode == Input.Keys.BACK) {
                     UiKit.consumeModalKey();
                     event.stop();
@@ -238,11 +239,9 @@ public class PlayerProfileDialog {
         NetworkManager nm = NetworkManager.getInstance();
         if (!nm.isConnected() || nm.socket == null) return;
 
-        // Đăng ký nhận dữ liệu phản hồi một lần
-        GameSocket s = nm.socket;
-        s.once("userProfileData", args -> Gdx.app.postRunnable(() -> {
-            if (dismissed || args == null || args.length == 0 || !(args[0] instanceof JSONObject)) return;
-            JSONObject data = (JSONObject) args[0];
+        // Đăng ký listener qua NetworkManager (tự gỡ trong dismiss, không đụng độ khi mở nhanh nhiều hồ sơ)
+        profileListener = data -> {
+            if (dismissed || data == null) return;
             String uId = data.optString("userId", "");
             if (!uId.equalsIgnoreCase(targetUserId)) return;
 
@@ -252,16 +251,17 @@ public class PlayerProfileDialog {
             }
 
             String sName = data.optString("name", initialName);
-            int sLvl = data.optInt("level", 1);
-            int sGold = data.optInt("gold", 500);
-            int sMatches = data.optInt("matches", 0);
-            int sWins = data.optInt("wins", 0);
+            int sLvl = Math.max(1, data.optInt("level", 1));
+            int sGold = Math.max(0, data.optInt("gold", 500));
+            int sMatches = Math.max(0, data.optInt("matches", 0));
+            int sWins = Math.max(0, Math.min(sMatches, data.optInt("wins", 0)));
             String sFav = data.optString("favoriteHero", charId == 2 ? "Vân U" : "Vân Tiêu");
             String sStatus = data.optString("status", "ONLINE");
             String sRoom = data.optString("roomCode", "");
 
             lblName.setText(sName);
             lblLevel.setText("Lv. " + sLvl);
+            lblRank.setText("[ " + PlayerProfile.rankTitleForLevel(sLvl).toUpperCase() + " ]");
             lblGold.setText(sGold + " Vàng");
             lblMatches.setText(String.valueOf(sMatches));
             lblWins.setText(String.valueOf(sWins));
@@ -283,14 +283,18 @@ public class PlayerProfileDialog {
                 lblStatus.setText("● Ngoại tuyến");
                 lblStatus.setColor(UiKit.MUTED);
             }
-        }));
-
-        s.emit("getUserProfile", targetUserId);
+        };
+        nm.addUserProfileListener(profileListener);
+        nm.getUserProfile(targetUserId);
     }
 
     public void dismiss() {
         if (dismissed) return;
         dismissed = true;
+        if (profileListener != null) {
+            NetworkManager.getInstance().removeUserProfileListener(profileListener);
+            profileListener = null;
+        }
         if (stage != null && keyListener != null) {
             stage.removeCaptureListener(keyListener);
         }

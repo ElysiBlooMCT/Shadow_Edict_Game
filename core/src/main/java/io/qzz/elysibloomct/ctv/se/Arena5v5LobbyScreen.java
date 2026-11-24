@@ -42,8 +42,11 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
     private int selectedHero;
     private boolean isReady = false;
     private boolean leaving = false;
+    private boolean hidden = false;
     private boolean disposed = false;
+    private boolean listenersRegistered = false;
     private boolean pendingRejoin = false;
+    private String pendingJoinCode = "";
     private boolean hostLegacyReadySent = false;
     private JSONArray lastOnlinePlayers = null;
     private int baseActorCount = Integer.MAX_VALUE;
@@ -51,15 +54,26 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
     private float roomSyncTimer = 0f;
 
     public Arena5v5LobbyScreen(Main game) {
+        this(game, "");
+    }
+
+    public Arena5v5LobbyScreen(Main game, String pendingJoinCode) {
         this.game = game;
         this.selectedTeam = (game.selectedTeam == 2) ? 2 : 1;
         this.selectedHero = "P2".equals(game.selectedCharacter) ? 2 : 1;
+        this.pendingJoinCode = (pendingJoinCode != null) ? pendingJoinCode.trim() : "";
     }
 
     @Override
     public void show() {
+        hidden = false;
         SoundManager.getInstance().playMenuBgm();
         NetworkManager nm = NetworkManager.getInstance();
+        String profName = PlayerProfile.getInstance().playerName;
+        if (profName != null && !profName.trim().isEmpty()) {
+            game.playerName = profName.trim();
+            nm.playerName = profName.trim();
+        }
         socket = nm.socket;
         nm.myCharacter = selectedHero;
         nm.myTeam = selectedTeam;
@@ -96,7 +110,10 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
         TextInputBridge.attach(txtPlayerName, "Tên của bạn");
         txtPlayerName.setTextFieldListener((f, c) -> {
             updateRosterDisplay(lastOnlinePlayers);
-            if (c == '\r' || c == '\n') stage.setKeyboardFocus(null);
+            if (c == '\r' || c == '\n') {
+                UiKit.consumeModalKey();
+                stage.setKeyboardFocus(null);
+            }
         });
         settings.add(txtPlayerName).size(220, 44).padRight(24);
         btnHeroWhite = UiKit.button("VÂN TIÊU (1)", UiKit.GRAY);
@@ -136,14 +153,18 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
         online.setBackground(UiKit.rounded(new Color(0.05f, 0.06f, 0.09f, 0.85f)));
         online.pad(8, 14, 8, 14);
         String rCode = nm.currentRoomCode;
-        lblRoomInfo = UiKit.label(rCode.isEmpty() ? "PHÒNG TRỰC TUYẾN: --" : ("PHÒNG: " + rCode), UiKit.normal(), UiKit.GOLD);
+        String roomHeader = !pendingJoinCode.isEmpty() ? ("ĐANG VÀO: " + pendingJoinCode)
+            : (rCode.isEmpty() ? "PHÒNG TRỰC TUYẾN: --" : ("PHÒNG: " + rCode));
+        lblRoomInfo = UiKit.label(roomHeader, UiKit.normal(), UiKit.GOLD);
         TextButton btnCreate = UiKit.button("TẠO PHÒNG (C)", UiKit.BLUE, UiKit.small());
         txtRoomCode = new TextField("", UiKit.textFieldStyle());
+        txtRoomCode.setMaxLength(8);
         TextInputBridge.attach(txtRoomCode, "Nhập mã phòng");
         txtRoomCode.setMessageText("Mã (Tab)");
         txtRoomCode.setAlignment(Align.center);
         txtRoomCode.setTextFieldListener((f, c) -> {
             if (c == '\r' || c == '\n') {
+                UiKit.consumeModalKey();
                 stage.setKeyboardFocus(null);
                 joinTypedRoom();
             }
@@ -178,7 +199,7 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
         updateRosterDisplay(null);
         updateActionButtons();
         updateMapButtonText();
-        pendingRejoin = !nm.currentRoomCode.isEmpty();
+        pendingRejoin = !pendingJoinCode.isEmpty() || !nm.currentRoomCode.isEmpty();
         setupSocketEvents();
         tryRejoin();
 
@@ -342,6 +363,7 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
             packet.put("name", game.playerName);
             packet.put("team", selectedTeam);
             packet.put("charId", selectedHero);
+            packet.put("selectedMap", NetworkManager.getInstance().selectedMap);
             packet.put("userId", PlayerProfile.getInstance().userId);
             packet.put("type", "5v5");
         } catch (Exception ignored) {}
@@ -427,13 +449,17 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
 
     private void tryRejoin() {
         NetworkManager nm = NetworkManager.getInstance();
-        if (!pendingRejoin || !nm.isConnected() || nm.currentRoomCode == null || nm.currentRoomCode.isEmpty()) return;
+        String targetCode = !pendingJoinCode.isEmpty() ? pendingJoinCode : nm.currentRoomCode;
+        if (!pendingRejoin || !nm.isConnected() || targetCode == null || targetCode.isEmpty()) return;
         pendingRejoin = false;
+        boolean joiningInvite = !pendingJoinCode.isEmpty() && !pendingJoinCode.equals(nm.currentRoomCode);
         syncPlayerConfig();
-        socket.emit("joinRoom", nm.currentRoomCode, buildPacket());
-        socket.emit("selectCharacter", selectedHero);
-        socket.emit("selectTeam", selectedTeam);
-        setStatus("Đang đồng bộ phòng 5v5 #" + nm.currentRoomCode + "...", UiKit.WARNING);
+        // Không gửi "selectTeam" ngay sau joinRoom để máy chủ tự cân bằng phe Xanh/Đỏ
+        socket.emit("joinRoom", targetCode, buildPacket());
+        if (!joiningInvite) {
+            socket.emit("selectCharacter", selectedHero);
+        }
+        setStatus((joiningInvite ? "Đang vào phòng 5v5 #" : "Đang đồng bộ phòng 5v5 #") + targetCode + "...", UiKit.WARNING);
     }
 
     private void startMatch() {
@@ -475,10 +501,14 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
 
         if (leaving) return;
         leaving = true;
+        hidden = true;
         cleanSocketListeners();
         syncPlayerConfig();
         if (lastOnlinePlayers != null) {
             nm.syncRoomPlayers(lastOnlinePlayers, PlayerProfile.getInstance().userId);
+            adoptServerTeam();
+            game.selectedTeam = (nm.myTeam == 2) ? 2 : 1;
+            game.selectedCharacter = (nm.myCharacter == 2) ? "P2" : "P1";
         }
         nm.updateMyPresence("IN_GAME", nm.currentRoomCode, "5v5");
         game.selectedOnlineMap = nm.selectedMap;
@@ -514,6 +544,7 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
     private void leaveToMenu() {
         if (leaving) return;
         leaving = true;
+        hidden = true;
         cleanSocketListeners();
         NetworkManager.getInstance().leaveRoom();
         game.setScreen(new MainMenuScreen(game));
@@ -525,7 +556,8 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
     }
 
     private void cleanSocketListeners() {
-        if (socket == null) return;
+        if (socket == null || !listenersRegistered) return;
+        listenersRegistered = false;
         for (String ev : ROOM_EVENTS) socket.off(ev);
     }
 
@@ -533,45 +565,64 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
         return (args != null && args.length > 0 && args[0] instanceof JSONObject) ? (JSONObject) args[0] : null;
     }
 
+    private void syncMyReadyFromPlayers(JSONArray players) {
+        if (players == null) return;
+        String mySockId = (socket != null && socket.id() != null) ? socket.id() : "";
+        int myIdx = NetworkManager.getInstance().myPlayerIndex;
+        for (int i = 0; i < players.length(); i++) {
+            JSONObject p = players.optJSONObject(i);
+            if (p == null) continue;
+            String pid = p.isNull("id") ? "" : p.optString("id", "");
+            boolean isMe = (!mySockId.isEmpty() && !pid.isEmpty()) ? mySockId.equals(pid) : (myIdx > 0 && i == myIdx - 1);
+            if (isMe) {
+                isReady = p.optBoolean("ready", false);
+                break;
+            }
+        }
+    }
+
     private void setupSocketEvents() {
         if (socket == null) return;
         cleanSocketListeners();
+        listenersRegistered = true;
         NetworkManager.getInstance().setMatchInviteListener(invite -> MatchInviteDialog.showOn(stage, game, invite));
 
         socket.on("roomCreated", args -> Gdx.app.postRunnable(() -> {
             JSONObject data = asJson(args);
-            if (disposed || data == null) return;
+            if (disposed || hidden || leaving || data == null) return;
             onEnterRoom(data.optString("roomCode", ""), data.optInt("playerIndex", 1));
             setStatus("Tạo phòng 5v5 thành công! Gửi mã cho bạn bè.", UiKit.SUCCESS);
         }));
         socket.on("roomJoined", args -> Gdx.app.postRunnable(() -> {
             JSONObject data = asJson(args);
-            if (disposed || data == null) return;
+            if (disposed || hidden || leaving || data == null) return;
             onEnterRoom(data.optString("roomCode", ""), data.optInt("playerIndex", 2));
             setStatus("Vào phòng 5v5 thành công!", UiKit.SUCCESS);
         }));
         socket.on("updateRoomState", args -> Gdx.app.postRunnable(() -> {
             JSONObject room = asJson(args);
-            if (disposed || room == null) return;
+            if (disposed || hidden || leaving || room == null) return;
             int sMap = room.optInt("selectedMap", 1);
             NetworkManager.getInstance().selectedMap = sMap;
             game.selectedOnlineMap = sMap;
-            updateMapButtonText();
             lastOnlinePlayers = room.optJSONArray("players");
             NetworkManager.getInstance().syncRoomPlayers(lastOnlinePlayers, PlayerProfile.getInstance().userId);
             adoptServerTeam();
+            syncMyReadyFromPlayers(lastOnlinePlayers);
+            updateMapButtonText();
             updateRosterDisplay(lastOnlinePlayers);
             updateActionButtons();
-            int n = (lastOnlinePlayers != null) ? lastOnlinePlayers.length() : 1;
-            setStatus("Người chơi trong phòng: " + n + " người", UiKit.TEXT);
         }));
         socket.on("playerJoined", args -> Gdx.app.postRunnable(() -> {
-            if (disposed) return;
+            if (disposed || hidden || leaving) return;
             JSONObject data = asJson(args);
             JSONObject room = data != null ? data.optJSONObject("room") : null;
             if (room != null && room.optJSONArray("players") != null) {
                 lastOnlinePlayers = room.optJSONArray("players");
                 NetworkManager.getInstance().syncRoomPlayers(lastOnlinePlayers, PlayerProfile.getInstance().userId);
+                adoptServerTeam();
+                syncMyReadyFromPlayers(lastOnlinePlayers);
+                updateMapButtonText();
                 updateRosterDisplay(lastOnlinePlayers);
             }
             updateActionButtons();
@@ -581,20 +632,24 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
             setStatus("Chiến binh " + joinedName + " đã vào phòng 5v5!", UiKit.SUCCESS);
         }));
         socket.on("playerLeft", args -> Gdx.app.postRunnable(() -> {
-            if (disposed) return;
+            if (disposed || hidden || leaving) return;
+            isReady = false;
             hostLegacyReadySent = false; // máy chủ đặt lại trạng thái Sẵn sàng khi có người rời phòng
             JSONObject data = asJson(args);
             JSONObject room = data != null ? data.optJSONObject("room") : null;
             if (room != null && room.optJSONArray("players") != null) {
                 lastOnlinePlayers = room.optJSONArray("players");
                 NetworkManager.getInstance().syncRoomPlayers(lastOnlinePlayers, PlayerProfile.getInstance().userId);
+                adoptServerTeam();
+                syncMyReadyFromPlayers(lastOnlinePlayers);
+                updateMapButtonText();
                 updateRosterDisplay(lastOnlinePlayers);
             }
             updateActionButtons();
             setStatus("Một người chơi đã rời phòng!", UiKit.WARNING);
         }));
         socket.on("startGame", args -> Gdx.app.postRunnable(() -> {
-            if (disposed) return;
+            if (disposed || hidden || leaving) return;
             JSONObject room = asJson(args);
             if (room != null) {
                 int sMap = room.optInt("selectedMap", NetworkManager.getInstance().selectedMap);
@@ -603,12 +658,13 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
                 if (room.optJSONArray("players") != null) {
                     lastOnlinePlayers = room.optJSONArray("players");
                     NetworkManager.getInstance().syncRoomPlayers(lastOnlinePlayers, PlayerProfile.getInstance().userId);
+                    adoptServerTeam();
                 }
             }
             startMatch(false);
         }));
         socket.on("startGame5v5", args -> Gdx.app.postRunnable(() -> {
-            if (disposed) return;
+            if (disposed || hidden || leaving) return;
             JSONObject room = asJson(args);
             if (room != null) {
                 int sMap = room.optInt("selectedMap", NetworkManager.getInstance().selectedMap);
@@ -617,26 +673,45 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
                 if (room.optJSONArray("players") != null) {
                     lastOnlinePlayers = room.optJSONArray("players");
                     NetworkManager.getInstance().syncRoomPlayers(lastOnlinePlayers, PlayerProfile.getInstance().userId);
+                    adoptServerTeam();
                 }
             }
             startMatch(false);
         }));
         socket.on("errorMsg", args -> Gdx.app.postRunnable(() -> {
-            if (disposed) return;
-            setStatus((args != null && args.length > 0) ? String.valueOf(args[0]) : "Lỗi máy chủ", UiKit.DANGER);
+            if (disposed || hidden || leaving) return;
+            String msg = (args != null && args.length > 0 && args[0] != null) ? String.valueOf(args[0]) : "Lỗi máy chủ";
+            NetworkManager nm = NetworkManager.getInstance();
+            if (!pendingJoinCode.isEmpty() || msg.contains("không tồn tại") || msg.contains("đã đầy")) {
+                pendingJoinCode = "";
+                if (!nm.currentRoomCode.isEmpty() && msg.contains("không tồn tại")) {
+                    nm.currentRoomCode = "";
+                    nm.currentRoomMode = "";
+                    nm.myPlayerIndex = 1;
+                    lastOnlinePlayers = null;
+                }
+                lblRoomInfo.setText(nm.currentRoomCode.isEmpty() ? "PHÒNG TRỰC TUYẾN: --" : ("PHÒNG: " + nm.currentRoomCode));
+                updateRosterDisplay(lastOnlinePlayers);
+                updateActionButtons();
+                updateMapButtonText();
+            }
+            setStatus(msg, UiKit.DANGER);
         }));
     }
 
     private void onEnterRoom(String code, int index) {
         if (code == null || code.isEmpty()) return;
+        pendingJoinCode = "";
         NetworkManager nm = NetworkManager.getInstance();
         nm.currentRoomCode = code;
+        nm.currentRoomMode = "5v5";
         nm.myPlayerIndex = index;
         nm.updateMyPresence("IN_ROOM", code, "5v5");
         hostLegacyReadySent = false;
         lblRoomInfo.setText("PHÒNG: " + code);
         isReady = false;
         updateActionButtons();
+        updateMapButtonText();
         if (nm.isConnected()) {
             // Không gửi lại "selectTeam" ở đây: phe đã nằm trong gói createRoom/joinRoom và máy chủ
             // có thể đã cân bằng phe; gửi lại sẽ kéo mọi người về cùng một phe.
@@ -704,8 +779,8 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
             for (int i = 0; i < onlinePlayers.length(); i++) {
                 JSONObject p = onlinePlayers.optJSONObject(i);
                 if (p == null) continue;
-                String pid = p.optString("id", "");
-                String puid = p.optString("userId", "");
+                String pid = p.isNull("id") ? "" : p.optString("id", "");
+                String puid = p.isNull("userId") ? "" : p.optString("userId", "");
 
                 boolean isMe;
                 if (!mySockId.isEmpty() && !pid.isEmpty()) {
@@ -803,7 +878,7 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
                     || Gdx.input.isKeyJustPressed(Input.Keys.NUMPAD_ENTER)
                     || Gdx.input.isKeyJustPressed(Input.Keys.SPACE)) {
                     startMatch();
-                    return;
+                    if (leaving) return;
                 }
             }
         }
@@ -816,6 +891,7 @@ public class Arena5v5LobbyScreen extends ScreenAdapter {
 
     @Override
     public void hide() {
+        hidden = true;
         cleanSocketListeners();
         NetworkManager.getInstance().setMatchInviteListener(null);
     }

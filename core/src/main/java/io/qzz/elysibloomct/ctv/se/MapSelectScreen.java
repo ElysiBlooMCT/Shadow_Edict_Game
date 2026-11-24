@@ -7,6 +7,7 @@ import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.glutils.PixmapTextureData;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
@@ -34,7 +35,8 @@ public class MapSelectScreen extends ScreenAdapter {
     private Texture mapScrollTex;
     private Texture glowDotTex;
     private Texture glowRingTex;
-    private Texture whitePixelTex;
+    private Pixmap glowDotPm;
+    private Pixmap glowRingPm;
 
     private int selectedMap = 1; // 1, 2, hoặc 3
     private float animTime = 0f;
@@ -87,28 +89,23 @@ public class MapSelectScreen extends ScreenAdapter {
         mapScrollTex = GameAssets.background("chonmanchoi.png");
         if (mapScrollTex == null) mapScrollTex = GameAssets.background("background1.jpg");
 
-        // Tạo texture điểm sáng phát quang (glow dot) và vòng sáng lan tỏa (glow ring)
-        Pixmap pDot = new Pixmap(64, 64, Pixmap.Format.RGBA8888);
-        pDot.setColor(new Color(1f, 0.85f, 0.25f, 0.95f));
-        pDot.fillCircle(32, 32, 28);
-        pDot.setColor(Color.WHITE);
-        pDot.fillCircle(32, 32, 16);
-        glowDotTex = new Texture(pDot);
-        pDot.dispose();
+        // Tạo texture điểm sáng phát quang (glow dot) và vòng sáng lan tỏa (glow ring) dạng managed
+        // để tự khôi phục khi Android mất GL context lúc chuyển ứng dụng.
+        glowDotPm = new Pixmap(64, 64, Pixmap.Format.RGBA8888);
+        glowDotPm.setColor(new Color(1f, 0.85f, 0.25f, 0.95f));
+        glowDotPm.fillCircle(32, 32, 28);
+        glowDotPm.setColor(Color.WHITE);
+        glowDotPm.fillCircle(32, 32, 16);
+        glowDotTex = new Texture(new PixmapTextureData(glowDotPm, null, false, false, true));
+        glowDotTex.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
 
-        Pixmap pRing = new Pixmap(128, 128, Pixmap.Format.RGBA8888);
-        pRing.setColor(new Color(1f, 0.82f, 0.20f, 0.65f));
-        pRing.drawCircle(64, 64, 58);
-        pRing.drawCircle(64, 64, 59);
-        pRing.drawCircle(64, 64, 60);
-        glowRingTex = new Texture(pRing);
-        pRing.dispose();
-
-        Pixmap pWhite = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
-        pWhite.setColor(Color.WHITE);
-        pWhite.fill();
-        whitePixelTex = new Texture(pWhite);
-        pWhite.dispose();
+        glowRingPm = new Pixmap(128, 128, Pixmap.Format.RGBA8888);
+        glowRingPm.setColor(new Color(1f, 0.82f, 0.20f, 0.65f));
+        glowRingPm.drawCircle(64, 64, 58);
+        glowRingPm.drawCircle(64, 64, 59);
+        glowRingPm.drawCircle(64, 64, 60);
+        glowRingTex = new Texture(new PixmapTextureData(glowRingPm, null, false, false, true));
+        glowRingTex.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
 
         buildUI();
         updateSelectionVisuals(selectedMap, false);
@@ -396,17 +393,18 @@ public class MapSelectScreen extends ScreenAdapter {
         batch.draw(glowDotTex, activeDotX - dw / 2f, activeDotY - dw / 2f, dw, dw);
 
         // Vẽ hào quang viền sáng vàng rực quanh bảng tên của bản đồ được chọn
+        com.badlogic.gdx.graphics.g2d.TextureRegion whiteReg = UiKit.whiteRegion();
         float pw = 148f, ph = 78f;
         batch.setColor(1.0f, 0.82f, 0.22f, 0.40f * pulse);
-        batch.draw(whitePixelTex, activePlaqueX - pw / 2f, activePlaqueY - ph / 2f, pw, ph);
+        batch.draw(whiteReg, activePlaqueX - pw / 2f, activePlaqueY - ph / 2f, pw, ph);
 
         // Khung viền sáng kim sắc
         batch.setColor(1.0f, 0.92f, 0.45f, 0.90f * pulse);
         float th = 3.5f;
-        batch.draw(whitePixelTex, activePlaqueX - pw / 2f, activePlaqueY - ph / 2f, pw, th);
-        batch.draw(whitePixelTex, activePlaqueX - pw / 2f, activePlaqueY + ph / 2f - th, pw, th);
-        batch.draw(whitePixelTex, activePlaqueX - pw / 2f, activePlaqueY - ph / 2f, th, ph);
-        batch.draw(whitePixelTex, activePlaqueX + pw / 2f - th, activePlaqueY - ph / 2f, th, ph);
+        batch.draw(whiteReg, activePlaqueX - pw / 2f, activePlaqueY - ph / 2f, pw, th);
+        batch.draw(whiteReg, activePlaqueX - pw / 2f, activePlaqueY + ph / 2f - th, pw, th);
+        batch.draw(whiteReg, activePlaqueX - pw / 2f, activePlaqueY - ph / 2f, th, ph);
+        batch.draw(whiteReg, activePlaqueX + pw / 2f - th, activePlaqueY - ph / 2f, th, ph);
 
         // Dấu mũi tên chỉ điểm mốc hoạt động
         float arrowBounce = MathUtils.sin(animTime * 6f) * 6f;
@@ -433,6 +431,7 @@ public class MapSelectScreen extends ScreenAdapter {
         if (batch != null) batch.dispose();
         if (glowDotTex != null) glowDotTex.dispose();
         if (glowRingTex != null) glowRingTex.dispose();
-        if (whitePixelTex != null) whitePixelTex.dispose();
+        if (glowDotPm != null) glowDotPm.dispose();
+        if (glowRingPm != null) glowRingPm.dispose();
     }
 }

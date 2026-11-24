@@ -106,8 +106,10 @@ public class Fighter5v5 {
         this.displayTag = ((team == 1) ? "[XANH] " : "[ĐỎ] ") + name;
     }
 
+    private float p2LungeTimer = 0f;
+
     public boolean takeDamage(int dmg) {
-        if (isDead) return false;
+        if (isDead || dmg <= 0) return false;
         hitTimer = 0.20f;
 
         if (shield > 0) {
@@ -127,9 +129,21 @@ public class Fighter5v5 {
             deaths++;
             respawnTimer = 5.0f;
             isAttacking = false;
+            attackTimer = 0f;
             isUltActive = false;
+            ultTimer = 0f;
             isStealth = false;
+            stealthTimer = 0f;
+            p2LungeTimer = 0f;
             shield = 0;
+            damageMultiplier = 1.0f;
+            speedMultiplier = 1.0f;
+            activeRune = null;
+            runeTimer = 0f;
+            hasTitanBuff = false;
+            titanBuffTimer = 0f;
+            hasAmbushBuff = false;
+            isInBush = false;
             if (body != null) {
                 deathX = body.getPosition().x;
                 deathY = body.getPosition().y;
@@ -153,16 +167,20 @@ public class Fighter5v5 {
                 this.ultCharge = 100f;
                 break;
             case BERSERK_DAMAGE:
+                this.speedMultiplier = 1.0f;
                 this.damageMultiplier = 1.50f;
                 this.activeRune = rune.type;
                 this.runeTimer = 15.0f;
                 break;
             case DIVINE_SHIELD:
                 this.shield = Math.min(600, this.shield + 350);
-                this.activeRune = rune.type;
-                this.runeTimer = 18.0f;
+                if (this.activeRune == null) {
+                    this.activeRune = rune.type;
+                    this.runeTimer = 18.0f;
+                }
                 break;
             case WIND_STRIDE:
+                this.damageMultiplier = 1.0f;
                 this.speedMultiplier = 1.60f;
                 this.activeRune = rune.type;
                 this.runeTimer = 15.0f;
@@ -299,8 +317,9 @@ public class Fighter5v5 {
             } else if (ultTimer < 0.70f) {
                 body.setLinearVelocity(0, 0.2f);
             } else {
+                float prevVy = body.getLinearVelocity().y;
                 body.setLinearVelocity(0, -18.0f);
-                if (body.getPosition().y <= 1.35f || (ultTimer > 0.85f && Math.abs(body.getLinearVelocity().y) < 0.5f)) {
+                if (body.getPosition().y <= 1.35f || (ultTimer > 0.85f && Math.abs(prevVy) < 0.5f) || ultTimer > 2.0f) {
                     isUltActive = false;
                     isAttacking = true;
                     hitThisAttack = false;
@@ -314,15 +333,16 @@ public class Fighter5v5 {
         // Cập nhật Ultimate P2: Sát Chiêu Hoàn Hảo (Tàng hình tăng tốc rồi chém lướt)
         if (isStealth) {
             stealthTimer -= delta;
-            if (stealthTimer > 2.8f) {
-                isAttacking = true;
-                hitThisAttack = false;
-                attackTimer = 0.30f;
-                attackCombo = 3;
-            }
             if (stealthTimer <= 0) {
                 isStealth = false;
             }
+        }
+        if (p2LungeTimer > 0f) {
+            p2LungeTimer -= delta;
+            body.setLinearVelocity(facing * 14.0f, body.getLinearVelocity().y);
+            lastX = myPos.x;
+            animState = "HIT3";
+            return;
         }
 
         // 1. Kiểm tra dẫm bệ phóng nảy cao (Jump Pads)
@@ -412,7 +432,7 @@ public class Fighter5v5 {
             // Nếu không có bùa gần, tìm kẻ địch gần nhất
             if (targetPos == null) {
                 // Kiểm tra người chơi thật (nếu khác phe)
-                if (playerTeam != this.team && !playerDead) {
+                if (playerPos != null && playerTeam != this.team && !playerDead) {
                     float pDst = myPos.dst(playerPos);
                     if (pDst < 18.0f) {
                         closestDist = pDst;
@@ -421,15 +441,19 @@ public class Fighter5v5 {
                     }
                 }
 
-                // Kiểm tra các bot khác (nếu khác phe)
-                for (int fi = 0; fi < allFighters.size; fi++) {
-                    Fighter5v5 f = allFighters.get(fi);
-                    if (f != null && f != this && f.team != this.team && !f.isDead && f.body != null) {
-                        float fDst = myPos.dst(f.body.getPosition());
-                        if (fDst < closestDist) {
-                            closestDist = fDst;
-                            targetPos = f.body.getPosition();
-                            targetKind = TargetKind.ENEMY;
+                // Kiểm tra các bot khác (nếu khác phe, giới hạn tầm nhìn 18m & tôn trọng tàng hình/bụi rậm)
+                if (allFighters != null) {
+                    for (int fi = 0; fi < allFighters.size; fi++) {
+                        Fighter5v5 f = allFighters.get(fi);
+                        if (f != null && f != this && f.team != this.team && !f.isDead && f.body != null) {
+                            if (f.isStealth) continue;
+                            float fDst = myPos.dst(f.body.getPosition());
+                            if (f.isInBush && (!this.isInBush || fDst > 2.5f)) continue;
+                            if (fDst < 18.0f && fDst < closestDist) {
+                                closestDist = fDst;
+                                targetPos = f.body.getPosition();
+                                targetKind = TargetKind.ENEMY;
+                            }
                         }
                     }
                 }
@@ -517,7 +541,7 @@ public class Fighter5v5 {
         }
 
         // Kích hoạt Ultimate khi đủ 100% nộ và mục tiêu ở gần
-        if (ultCharge >= 100f && isEnemyTarget && closestDist < 4.5f && !isUltActive) {
+        if (ultCharge >= 100f && isEnemyTarget && closestDist < 4.5f && !isUltActive && !isStealth) {
             ultCharge = 0f;
             if (ultType.equals("P1")) {
                 isUltActive = true;
@@ -526,6 +550,11 @@ public class Fighter5v5 {
             } else {
                 isStealth = true;
                 stealthTimer = 3.5f;
+                p2LungeTimer = 0.26f;
+                isAttacking = true;
+                hitThisAttack = false;
+                attackTimer = 0.30f;
+                attackCombo = 3;
                 // Lao chém tức thì
                 body.setLinearVelocity(facing * 14.0f, 1.0f);
             }
@@ -546,10 +575,12 @@ public class Fighter5v5 {
         Vector2 myPos = body.getPosition();
         float best = 999f;
         if (playerTeam != team && !playerDead && playerPos != null) best = myPos.dst(playerPos);
-        for (int i = 0; i < all.size; i++) {
-            Fighter5v5 f = all.get(i);
-            if (f != this && f.team != team && !f.isDead && f.body != null) {
-                best = Math.min(best, myPos.dst(f.body.getPosition()));
+        if (all != null) {
+            for (int i = 0; i < all.size; i++) {
+                Fighter5v5 f = all.get(i);
+                if (f != null && f != this && f.team != team && !f.isDead && f.body != null && !f.isStealth) {
+                    best = Math.min(best, myPos.dst(f.body.getPosition()));
+                }
             }
         }
         return best;
@@ -560,11 +591,24 @@ public class Fighter5v5 {
         hp = maxHp;
         shield = 200; // Khiên bảo vệ khi mới hồi sinh
         isAttacking = false;
+        attackTimer = 0f;
+        attackCooldown = 0f;
+        hitTimer = 0f;
+        jumpCooldown = 0f;
+        jumpPadCooldown = 0f;
         isUltActive = false;
+        ultTimer = 0f;
         isStealth = false;
+        stealthTimer = 0f;
+        p2LungeTimer = 0f;
         damageMultiplier = 1.0f;
         speedMultiplier = 1.0f;
         activeRune = null;
+        runeTimer = 0f;
+        hasTitanBuff = false;
+        titanBuffTimer = 0f;
+        hasAmbushBuff = false;
+        isInBush = false;
         isRetreating = false;
         healAccumulator = 0f;
         dropTimer = 0f;

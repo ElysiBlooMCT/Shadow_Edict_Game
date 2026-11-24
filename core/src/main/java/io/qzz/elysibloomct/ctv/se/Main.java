@@ -45,7 +45,11 @@ public class Main extends Game {
             playerName = profile.playerName;
             profile.applyAudioSettings();
             LanguageManager.init();
-            NetworkManager.getInstance().registerUserWithServer();
+            // Khởi tạo DeviceIdentity trên luồng chính trước khi Socket.IO kết nối trên luồng nền
+            DeviceIdentity.get();
+            NetworkManager nm = NetworkManager.getInstance();
+            nm.ensureConnected();
+            nm.registerUserWithServer();
         } catch (Exception e) {
             Gdx.app.error("Main", "Khoi tao ho so/mang that bai", e);
         }
@@ -124,6 +128,8 @@ public class Main extends Game {
         if (current != null) {
             try { current.hide(); current.dispose(); } catch (Exception ignored) {}
         }
+        MatchInviteDialog.dismissActive();
+        try { NetworkManager.getInstance().shutdown(); } catch (Exception ignored) {}
         SoundManager.getInstance().dispose();
         GameAssets.disposeAll();
         UiKit.dispose();

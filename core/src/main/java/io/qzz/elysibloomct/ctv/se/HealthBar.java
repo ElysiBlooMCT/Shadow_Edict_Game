@@ -24,10 +24,18 @@ public class HealthBar extends Actor {
 
     public void setMaxHp(float max) {
         this.maxHp = Math.max(1f, max);
+        if (this.currentHp > this.maxHp) this.currentHp = this.maxHp;
+        if (this.delayedHp > this.maxHp) this.delayedHp = this.maxHp;
     }
 
     public void setHp(float hp) {
         this.currentHp = MathUtils.clamp(hp, 0f, maxHp);
+    }
+
+    public void resetHp(float hp, float max) {
+        this.maxHp = Math.max(1f, max);
+        this.currentHp = MathUtils.clamp(hp, 0f, this.maxHp);
+        this.delayedHp = this.currentHp;
     }
 
     @Override

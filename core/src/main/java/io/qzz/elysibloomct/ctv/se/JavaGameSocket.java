@@ -3,6 +3,13 @@ package io.qzz.elysibloomct.ctv.se;
 import io.socket.client.IO;
 import io.socket.client.Socket;
 import io.socket.engineio.client.transports.WebSocket;
+import okhttp3.Dispatcher;
+import okhttp3.OkHttpClient;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Kết nối Socket.IO dùng thư viện socket.io-client bản Java (PC, Android).
@@ -17,7 +24,19 @@ public final class JavaGameSocket extends GameSocket {
     }
 
     public static GameSocket create(String url) throws Exception {
+        // Dùng daemon threads cho OkHttp để không giữ tiến trình Desktop treo nền sau khi đóng cửa sổ
+        ExecutorService exec = new ThreadPoolExecutor(0, Integer.MAX_VALUE, 60L, TimeUnit.SECONDS,
+            new SynchronousQueue<>(), r -> {
+                Thread t = new Thread(r, "SE-SocketOkHttp");
+                t.setDaemon(true);
+                return t;
+            });
+        OkHttpClient httpClient = new OkHttpClient.Builder()
+            .dispatcher(new Dispatcher(exec))
+            .build();
         IO.Options options = new IO.Options();
+        options.callFactory = httpClient;
+        options.webSocketFactory = httpClient;
         options.transports = new String[] { WebSocket.NAME };
         options.reconnection = true;
         options.reconnectionAttempts = Integer.MAX_VALUE; // tự kết nối lại suốt phiên chơi

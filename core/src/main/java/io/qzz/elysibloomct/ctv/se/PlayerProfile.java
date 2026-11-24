@@ -52,39 +52,75 @@ public class PlayerProfile {
         return Gdx.app.getPreferences(PREF_NAME);
     }
 
-    public void load() {
+    private static int safeInt(Preferences prefs, String key, int def) {
+        try { return prefs.getInteger(key, def); } catch (Exception e) { return def; }
+    }
+
+    private static float safeFloat(Preferences prefs, String key, float def) {
         try {
-            Preferences prefs = prefs();
-            userId = prefs.getString("userId", "");
-            if (userId.isEmpty()) {
-                userId = "AL-" + (1000 + new Random().nextInt(9000));
-                prefs.putString("userId", userId);
-            }
-            playerName = prefs.getString("playerName", "Chiến Thần");
-            gold = prefs.getInteger("gold", 500);
-            level = prefs.getInteger("level", 1);
-            matches = prefs.getInteger("matches", 0);
-            wins = prefs.getInteger("wins", 0);
-            favoriteHero = prefs.getString("favoriteHero", "Vân Tiêu");
-            maxUnlockedLevel = MathUtils.clamp(prefs.getInteger("maxUnlockedLevel", 1), 1, MAX_LEVEL);
-            bestScore = prefs.getInteger("bestScore", 0);
-            lastStoryLevel = MathUtils.clamp(prefs.getInteger("lastStoryLevel", 1), 1, maxUnlockedLevel);
-            lastCharacter = "P2".equals(prefs.getString("lastCharacter", "P1")) ? "P2" : "P1";
-            musicEnabled = prefs.getBoolean("musicEnabled", true);
-            soundEnabled = prefs.getBoolean("soundEnabled", true);
-            musicVolume = MathUtils.clamp(prefs.getFloat("musicVolume", 0.50f), 0f, 1f);
-            soundVolume = MathUtils.clamp(prefs.getFloat("soundVolume", 0.85f), 0f, 1f);
-            language = prefs.getString("language", "vi");
-            prefs.flush();
+            float v = prefs.getFloat(key, def);
+            return Float.isFinite(v) ? v : def;
         } catch (Exception e) {
-            if (userId == null || userId.isEmpty()) {
-                userId = "AL-" + (1000 + new Random().nextInt(9000));
+            return def;
+        }
+    }
+
+    private static boolean safeBool(Preferences prefs, String key, boolean def) {
+        try { return prefs.getBoolean(key, def); } catch (Exception e) { return def; }
+    }
+
+    private static String safeStr(Preferences prefs, String key, String def) {
+        try {
+            String v = prefs.getString(key, def);
+            return v != null ? v : def;
+        } catch (Exception e) {
+            return def;
+        }
+    }
+
+    public void load() {
+        Preferences prefs = null;
+        try {
+            prefs = prefs();
+        } catch (Exception e) {
+            if (userId == null || userId.isEmpty()) userId = "AL-" + (1000 + new Random().nextInt(9000));
+            if (playerName == null || playerName.isEmpty()) playerName = "Chiến Thần";
+            if (gold < 0) gold = 500;
+            if (level < 1) level = 1;
+            return;
+        }
+
+        boolean generatedUserId = false;
+        userId = safeStr(prefs, "userId", "");
+        if (userId.isEmpty()) {
+            userId = "AL-" + (1000 + new Random().nextInt(9000));
+            generatedUserId = true;
+        }
+        playerName = safeStr(prefs, "playerName", "Chiến Thần");
+        if (playerName.trim().isEmpty()) playerName = "Chiến Thần";
+        gold = Math.max(0, safeInt(prefs, "gold", 500));
+        level = Math.max(1, safeInt(prefs, "level", 1));
+        matches = Math.max(0, safeInt(prefs, "matches", 0));
+        wins = MathUtils.clamp(safeInt(prefs, "wins", 0), 0, matches);
+        favoriteHero = safeStr(prefs, "favoriteHero", "Vân Tiêu");
+        if (favoriteHero.trim().isEmpty()) favoriteHero = "Vân Tiêu";
+        maxUnlockedLevel = MathUtils.clamp(safeInt(prefs, "maxUnlockedLevel", 1), 1, MAX_LEVEL);
+        bestScore = Math.max(0, safeInt(prefs, "bestScore", 0));
+        lastStoryLevel = MathUtils.clamp(safeInt(prefs, "lastStoryLevel", 1), 1, maxUnlockedLevel);
+        lastCharacter = "P2".equals(safeStr(prefs, "lastCharacter", "P1")) ? "P2" : "P1";
+        musicEnabled = safeBool(prefs, "musicEnabled", true);
+        soundEnabled = safeBool(prefs, "soundEnabled", true);
+        musicVolume = MathUtils.clamp(safeFloat(prefs, "musicVolume", 0.50f), 0f, 1f);
+        soundVolume = MathUtils.clamp(safeFloat(prefs, "soundVolume", 0.85f), 0f, 1f);
+        language = safeStr(prefs, "language", "vi");
+
+        if (generatedUserId) {
+            try {
+                prefs.putString("userId", userId);
+                prefs.flush();
+            } catch (Exception e) {
+                Gdx.app.error("PlayerProfile", "Khong luu duoc userId moi", e);
             }
-            if (playerName == null || playerName.isEmpty()) {
-                playerName = "Chiến Thần";
-            }
-            gold = 500;
-            level = 1;
         }
     }
 
@@ -136,11 +172,15 @@ public class PlayerProfile {
     }
 
     public String getRankTitle() {
-        if (level <= 1) return "Tập Sự";
-        if (level <= 4) return "Chiến Binh";
-        if (level <= 9) return "Tinh Anh Hư Không";
-        if (level <= 14) return "Sát Thủ Ám Ảnh";
-        if (level <= 19) return "Bậc Thầy Song Đao";
+        return rankTitleForLevel(level);
+    }
+
+    public static String rankTitleForLevel(int lvl) {
+        if (lvl <= 1) return "Tập Sự";
+        if (lvl <= 4) return "Chiến Binh";
+        if (lvl <= 9) return "Tinh Anh Hư Không";
+        if (lvl <= 14) return "Sát Thủ Ám Ảnh";
+        if (lvl <= 19) return "Bậc Thầy Song Đao";
         return "Huyền Thoại Bất Diệt";
     }
 

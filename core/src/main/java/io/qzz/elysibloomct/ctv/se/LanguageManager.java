@@ -114,9 +114,9 @@ public final class LanguageManager {
         put(VI, "ON", "BẬT");
         put(VI, "OFF", "TẮT");
         put(VI, "SAVE_CLOSE", "LƯU & ĐÓNG (Esc)");
-        put(VI, "SAVE_CLOSE_ENTER", "► LƯU & ĐÓNG (Enter/Esc) ◄");
+        put(VI, "SAVE_CLOSE_ENTER", "▸ LƯU & ĐÓNG (Enter/Esc) ‹");
         put(VI, "CONTROLS_GUIDE",
-            "DI CHUYỂN & PARKOUR: A/D hoặc ←/→ chạy • W/Space/↑ nhảy & leo lên • S/↓ ngồi/đỡ đòn & chui thấp • R bám tường\n" +
+            "DI CHUYỂN & PARKOUR: A/D hoặc ←/→ chạy • W/Space/Lên nhảy & leo lên • S/Xuống ngồi/đỡ đòn & chui thấp • R bám tường\n" +
             "CHIẾN ĐẤU: J hoặc Ctrl đánh • L/Shift lướt • Z/X/C (hoặc I/O/Y) kỹ năng 1/2/3 • U tuyệt kỹ • K ưng kích • F/Q ám sát\n" +
             "VŨ KHÍ & TIỆN ÍCH: Tab hoặc 1–5 đổi vũ khí • E tương tác • B tiệm đồ • H uống thuốc • F1 ẩn/hiện nút ảo\n" +
             "TRỰC TUYẾN: T mở chat • Giữ V bộ đàm / M bật-tắt mic • P/Esc tạm dừng trận đấu");
@@ -142,9 +142,9 @@ public final class LanguageManager {
         put(EN, "ON", "ON");
         put(EN, "OFF", "OFF");
         put(EN, "SAVE_CLOSE", "SAVE & CLOSE (Esc)");
-        put(EN, "SAVE_CLOSE_ENTER", "► SAVE & CLOSE (Enter/Esc) ◄");
+        put(EN, "SAVE_CLOSE_ENTER", "▸ SAVE & CLOSE (Enter/Esc) ‹");
         put(EN, "CONTROLS_GUIDE",
-            "MOVEMENT & PARKOUR: A/D or ←/→ Run • W/Space/↑ Jump & Climb • S/↓ Crouch/Block & Crawl • R Wall Cling\n" +
+            "MOVEMENT & PARKOUR: A/D or ←/→ Run • W/Space/Up Jump & Climb • S/Down Crouch/Block & Crawl • R Wall Cling\n" +
             "COMBAT: J or Ctrl Attack • L/Shift Dash • Z/X/C (or I/O/Y) Skills 1/2/3 • U Ultimate • K Eagle Strike • F/Q Assassinate\n" +
             "WEAPONS & UTILITY: Tab or 1–5 Switch Weapon • E Interact • B Shop • H Potion • F1 Virtual Buttons\n" +
             "MULTIPLAYER: T Open Chat • Hold V Voice / M Toggle Mic • P/Esc Pause Game");

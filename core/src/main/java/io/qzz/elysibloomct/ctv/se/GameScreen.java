@@ -388,6 +388,7 @@ public class GameScreen implements Screen {
     private GroundMob targetToAssassinate = null;
     private Fighter5v5 targetFighterToAssassinate = null;
     private boolean targetRemoteToAssassinate = false;
+    private String targetAssassinatePeerId = null;
     private float cinematicAssassinateTimer = 0f;
     private float assassinateFocusX = 0f, assassinateFocusY = 0f;
     private boolean isAssassinating = false;
@@ -395,6 +396,7 @@ public class GameScreen implements Screen {
     private GroundMob pendingAssassinateMob = null;
     private Fighter5v5 pendingAssassinateFighter = null;
     private boolean pendingAssassinateRemote = false;
+    private String pendingAssassinatePeerId = null;
     private float assassinateVictimX = 0f, assassinateVictimY = 0f;
 
     // -- UI --
@@ -531,6 +533,7 @@ public class GameScreen implements Screen {
     // -- Score --
     private int score = 0;
     private int goldEarned = 0;
+    private int stageBankedGold = 0;
     private int mobsKilledCount = 0;
 
     // -- Weapons --
@@ -560,6 +563,7 @@ public class GameScreen implements Screen {
     // -- Network --
     private static class RemotePeer5v5 {
         String id;
+        String socketId = "";
         String name = "Đối thủ";
         int team = 2;
         int charId = 1;
@@ -582,6 +586,7 @@ public class GameScreen implements Screen {
     private GameSocket socket;
     private final String myNetId = DeviceIdentity.randomUuid().substring(0, 8);
     private String primaryRemoteId = "";
+    private String primaryRemoteSocketId = "";
     private float remoteX = -999f, remoteY = -999f;
     private float targetRemoteX = -999f, targetRemoteY = -999f;
     private int remoteFacing = 1;
@@ -598,6 +603,25 @@ public class GameScreen implements Screen {
     private float remoteAttackAnimTime = 0f;
     private float remoteHitFlashTimer = 0f;
     private final Array<RemotePeer5v5> extraPeers5v5 = new Array<>();
+    private final Array<Pixmap> ownedPixmaps = new Array<>();
+    private boolean isHidden = false;
+    private boolean networkListenersRegistered = false;
+    private float playerPoisonSlowTimer = 0f;
+    private float reviveCooldownTimer = 0f;
+    private boolean pendingEagleGroundAbort = false;
+    private String bowLockPeerId = null;
+    private String lockOnPeerId = null;
+    private String eagleTargetPeerId = null;
+    private String p2TargetPeerId = null;
+    private boolean lockOnIsPrimaryRemote = false;
+    private boolean eagleTargetIsPrimaryRemote = false;
+    private boolean p2TargetIsPrimaryRemote = false;
+
+    /** Tạo Texture managed từ Pixmap (tự khôi phục khi Android mất GL context lúc chuyển ứng dụng). */
+    private Texture managedTex(Pixmap pm) {
+        ownedPixmaps.add(pm);
+        return new Texture(new com.badlogic.gdx.graphics.glutils.PixmapTextureData(pm, null, false, false, true));
+    }
     private float networkTimer = 0f;
     private float lastSentX = -999f, lastSentY = -999f;
     private String lastSentAnim = "";
@@ -735,17 +759,27 @@ public class GameScreen implements Screen {
         if (savedHp > 0) this.playerHp = Math.min(savedHp, this.playerMaxHp);
         this.goldEarned = Math.max(0, savedGold);
         this.score = Math.max(0, savedScore);
-        if (savedPotions > 0) this.healthPotions = savedPotions;
-        if (checkpointX > 1.0f) {
+        if (savedPotions >= 0) this.healthPotions = savedPotions;
+        if (Float.isFinite(checkpointX) && checkpointX > 1.0f) {
             this.activeCheckpointX = checkpointX;
-            if (playerBody != null) {
-                float targetY = 1.2f;
-                for (int i = 0; i < platformsList.size; i++) {
-                    MapPlatform p = platformsList.get(i);
-                    if (checkpointX >= p.x && checkpointX <= p.x + p.width) {
-                        targetY = Math.max(targetY, p.y + p.height + 0.5f);
-                    }
+            // Khớp checkpoint gần nhất để lấy đúng độ cao Y (tránh bị đặt lên bục pháo phía trên ở ải 2-3)
+            // và đánh dấu các checkpoint đã đi qua để không kích hoạt lại ngay khung hình 1.
+            float targetY = -1f;
+            for (int i = 0; i < checkpoints.size; i++) {
+                MapCheckpoint cp = checkpoints.get(i);
+                if (cp.x <= checkpointX + 1.2f) {
+                    cp.activated = true;
                 }
+                if (Math.abs(cp.x - checkpointX) <= 1.2f) {
+                    targetY = cp.y + 0.25f;
+                }
+            }
+            if (targetY < 0f) {
+                MapPlatform g = groundAt(checkpointX);
+                targetY = (g != null) ? (g.y + g.height + 0.5f) : 1.2f;
+            }
+            this.activeCheckpointY = targetY;
+            if (playerBody != null) {
                 playerBody.setTransform(checkpointX, targetY, 0f);
                 playerBody.setLinearVelocity(0, 0);
                 float halfInitW = viewport.getWorldWidth() / 2f;
@@ -756,6 +790,9 @@ public class GameScreen implements Screen {
                 camera.update();
             }
         }
+        if (playerHpBar != null) playerHpBar.resetHp(playerHp, playerMaxHp);
+        if (lblPlayerHp != null) lblPlayerHp.setText("Máu: " + playerHp + " HP");
+        updateScoreGoldUI();
     }
 
     // -- Constructors --
@@ -772,8 +809,6 @@ public class GameScreen implements Screen {
         try {
             if (NetworkManager.getInstance() != null) {
                 this.socket = NetworkManager.getInstance().socket;
-                String mName = (currentGameMode == GameMode.PVP) ? "1v1" : ((currentGameMode == GameMode.BATTLE_5V5) ? "5v5" : ((currentGameMode == GameMode.COOP) ? "coop" : "solo"));
-                NetworkManager.getInstance().updateMyPresence("IN_GAME", NetworkManager.getInstance().currentRoomCode, mName);
             }
         } catch (Exception ignored) {}
 
@@ -784,6 +819,7 @@ public class GameScreen implements Screen {
             this.playerMaxHp = 1000;
             this.playerHp = 1000;
             this.remoteHp = 1000;
+            this.healthPotions = 0; // Đấu 1v1 không dùng bình máu
             pvpUltOrbs.clear();
             pvpUltOrbs.add(new UltOrb(12.8f, 3.8f)); // Trung tâm võ đài
             pvpUltOrbs.add(new UltOrb(6.5f, 4.2f));  // Bục cao bên trái
@@ -807,21 +843,30 @@ public class GameScreen implements Screen {
 
         this.ultimateKills = ULTIMATE_REQ_KILLS; // Sẵn sàng dùng ngay khi vừa vào trận!
 
-        // Xác định chính xác nhân vật được chọn (P1 hay P2) và thông tin đối thủ ngay khi khởi tạo
+        // Xác định chính xác nhân vật và phe: nếu đang ở phòng online, lấy cấu hình server đã đồng bộ trong NetworkManager
+        if (currentGameMode != GameMode.BATTLE_5V5 && game != null) {
+            game.selectedTeam = 1; // Tránh sót phe Đỏ từ trận 5v5 trước gây đánh nhầm đồng đội ở CO-OP
+        }
         if (currentGameMode != GameMode.SOLO && NetworkManager.getInstance() != null) {
             NetworkManager nm = NetworkManager.getInstance();
-            if ("P2".equals(game != null ? game.selectedCharacter : null) || nm.myCharacter == 2) {
-                this.selectedChar = "P2";
-                nm.myCharacter = 2;
-                if (game != null) game.selectedCharacter = "P2";
+            boolean inOnlineRoom = nm.currentRoomCode != null && !nm.currentRoomCode.isEmpty();
+            int resolvedChar;
+            if (inOnlineRoom) {
+                resolvedChar = (nm.myCharacter == 2) ? 2 : 1;
             } else {
-                this.selectedChar = "P1";
-                nm.myCharacter = 1;
-                if (game != null) game.selectedCharacter = "P1";
+                resolvedChar = "P2".equals(game != null ? game.selectedCharacter : null) ? 2 : 1;
+            }
+            this.selectedChar = (resolvedChar == 2) ? "P2" : "P1";
+            nm.myCharacter = resolvedChar;
+            if (game != null) game.selectedCharacter = this.selectedChar;
+
+            if (currentGameMode == GameMode.BATTLE_5V5 && inOnlineRoom && (nm.myTeam == 1 || nm.myTeam == 2)) {
+                if (game != null) game.selectedTeam = nm.myTeam;
             }
             this.remoteCharId = (nm.partnerCharacter == 2) ? 2 : 1;
             int myT = (game != null && game.selectedTeam == 2) ? 2 : 1;
-            this.remoteTeam = (nm.partnerTeam == 1 || nm.partnerTeam == 2) ? nm.partnerTeam : (myT == 1 ? 2 : 1);
+            this.remoteTeam = (currentGameMode == GameMode.COOP) ? myT
+                : ((nm.partnerTeam == 1 || nm.partnerTeam == 2) ? nm.partnerTeam : (myT == 1 ? 2 : 1));
             if (nm.partnerName != null && !nm.partnerName.isEmpty()) {
                 this.remoteName = nm.partnerName;
             }
@@ -884,8 +929,8 @@ public class GameScreen implements Screen {
             seeded = true;
         }
 
-        setupItemPositions();
         createWorldObjects();
+        setupItemPositions();
         createPlayer();
 
         if (currentGameMode == GameMode.BATTLE_5V5) {
@@ -914,7 +959,6 @@ public class GameScreen implements Screen {
 
         createMobileUI();
         setupContactListener();
-        setupNetworkListeners();
     }
 
     private void loadCharacterSprites() {
@@ -1210,8 +1254,7 @@ public class GameScreen implements Screen {
             Pixmap idleFallbackPix = new Pixmap(32, 48, Pixmap.Format.RGBA8888);
             idleFallbackPix.setColor(new Color(0.9f, 0.9f, 0.95f, 1.0f));
             idleFallbackPix.fillRectangle(8, 8, 16, 32);
-            idleFallbackTex = new Texture(idleFallbackPix);
-            idleFallbackPix.dispose();
+            idleFallbackTex = managedTex(idleFallbackPix);
             staticIdleFrame = new TextureRegion(idleFallbackTex);
         }
 
@@ -1245,22 +1288,61 @@ public class GameScreen implements Screen {
         else Gdx.app.error("GameScreen", "THIEU animation:" + miss);
     }
 
+    private Vector2 snapPickupPosition(float desiredX, float preferredY) {
+        float x = MathUtils.clamp(desiredX, 2.0f, Math.max(2.0f, mapWidth - 2.0f));
+        // Nếu có sàn/bục tại x gần preferredY (hoặc mặt đất), đặt vật phẩm ngay phía trên mặt sàn đó
+        MapPlatform best = null;
+        float bestScore = Float.MAX_VALUE;
+        for (int i = 0; i < platformsList.size; i++) {
+            MapPlatform p = platformsList.get(i);
+            if (x >= p.x + 0.35f && x <= p.x + p.width - 0.35f) {
+                float topY = p.y + p.height;
+                // Tránh đặt vật phẩm bên dưới trần hầm chui thấp
+                if (hasLowCeilingAt(x, topY)) continue;
+                float diff = Math.abs((topY + 0.45f) - preferredY);
+                if (diff < bestScore) {
+                    bestScore = diff;
+                    best = p;
+                }
+            }
+        }
+        if (best != null) {
+            return new Vector2(x, best.y + best.height + 0.45f);
+        }
+        float sx = snapToGround(x, 0.8f);
+        MapPlatform g = groundAt(sx);
+        float y = (g != null) ? (g.y + g.height + 0.45f) : Math.max(1.05f, preferredY);
+        return new Vector2(sx, y);
+    }
+
     private void setupItemPositions() {
+        hpPickupPositions.clear();
+        hpPickupActives.clear();
+        weaponPickupPositions.clear();
+        weaponPickupActives.clear();
+
         if (currentGameMode == GameMode.PVP) {
             hpPickupPositions.add(new Vector2(12.8f, 1.05f));
             hpPickupActives.add(true);
             weaponPickupPositions.add(new Vector2(12.8f, 3.2f));
             weaponPickupActives.add(true);
+        } else if (currentGameMode == GameMode.BATTLE_5V5) {
+            // Đấu trường 5v5 dài 60m và đã có hệ thống Bùa (PowerUpRune) đối xứng; đặt vật phẩm đối xứng trong [0, 60]
+            hpPickupPositions.add(snapPickupPosition(15.0f, 1.05f));
+            hpPickupPositions.add(snapPickupPosition(45.0f, 1.05f));
+            for (int i = 0; i < hpPickupPositions.size; i++) hpPickupActives.add(true);
+            weaponPickupPositions.add(snapPickupPosition(30.0f, 1.05f));
+            for (int i = 0; i < weaponPickupPositions.size; i++) weaponPickupActives.add(true);
         } else {
-            hpPickupPositions.add(new Vector2(12.0f, 1.05f));
-            hpPickupPositions.add(new Vector2(28.0f, 1.05f));
-            hpPickupPositions.add(new Vector2(46.0f, 2.5f));
-            hpPickupPositions.add(new Vector2(65.0f, 1.05f));
+            hpPickupPositions.add(snapPickupPosition(12.0f, 1.05f));
+            hpPickupPositions.add(snapPickupPosition(28.0f, 1.05f));
+            hpPickupPositions.add(snapPickupPosition(46.0f, 2.5f));
+            hpPickupPositions.add(snapPickupPosition(65.0f, 1.05f));
             for (int i = 0; i < hpPickupPositions.size; i++) hpPickupActives.add(true);
 
-            weaponPickupPositions.add(new Vector2(8.5f, 2.3f));
-            weaponPickupPositions.add(new Vector2(34.0f, 3.2f));
-            weaponPickupPositions.add(new Vector2(54.0f, 4.5f));
+            weaponPickupPositions.add(snapPickupPosition(8.5f, 2.3f));
+            weaponPickupPositions.add(snapPickupPosition(34.0f, 3.2f));
+            weaponPickupPositions.add(snapPickupPosition(54.0f, 4.5f));
             for (int i = 0; i < weaponPickupPositions.size; i++) weaponPickupActives.add(true);
         }
     }
@@ -1291,8 +1373,7 @@ public class GameScreen implements Screen {
         cpm.fillRectangle(22, 2, 3, 3);
         cpm.setColor(Color.WHITE);
         cpm.drawPixel(2, 2); cpm.drawPixel(2, 22); cpm.drawPixel(22, 2);
-        platformConsoleTex = new Texture(cpm);
-        cpm.dispose();
+        platformConsoleTex = managedTex(cpm);
 
         // 2. Map-Specific Terrain Textures (High-Contrast Medieval Pixel Art):
         if (mapId == 2) {
@@ -1316,8 +1397,7 @@ public class GameScreen implements Screen {
             }
             gm.setColor(new Color(0.60f, 0.90f, 1.0f, 1f));
             gm.fillRectangle(0, 0, 64, 4);
-            groundBrickTexture = new Texture(gm);
-            gm.dispose();
+            groundBrickTexture = managedTex(gm);
 
             // Bục ván gỗ cầu tàu sẫm màu ngâm nước biển (64x16)
             Pixmap pm = new Pixmap(64, 16, Pixmap.Format.RGBA8888);
@@ -1340,8 +1420,7 @@ public class GameScreen implements Screen {
             pm.fillRectangle(0, 0, 64, 3);
             pm.setColor(new Color(0.08f, 0.10f, 0.14f, 1f));
             pm.drawRectangle(0, 0, 64, 16);
-            platformWoodTexture = new Texture(pm);
-            pm.dispose();
+            platformWoodTexture = managedTex(pm);
 
             // Tường kè đá cảng biển (64x64)
             Pixmap wm = new Pixmap(64, 64, Pixmap.Format.RGBA8888);
@@ -1361,8 +1440,7 @@ public class GameScreen implements Screen {
                     wm.drawCircle(32, yOff + 8, 5);
                 }
             }
-            wallTexture = new Texture(wm);
-            wm.dispose();
+            wallTexture = managedTex(wm);
 
         } else if (mapId == 3) {
             // === MAP 3: PHÁO ĐÀI TRÊN NÚI TRƯỚC CƠN BÃO (Alpine Slate, Reinforced Military Timber, Bastion Ramparts) ===
@@ -1385,8 +1463,7 @@ public class GameScreen implements Screen {
             }
             gm.setColor(new Color(0.95f, 0.98f, 1.0f, 1f));
             gm.fillRectangle(0, 0, 64, 4);
-            groundBrickTexture = new Texture(gm);
-            gm.dispose();
+            groundBrickTexture = managedTex(gm);
 
             // Giàn giáo gỗ thông núi giằng kim loại kiên cố (64x16)
             Pixmap pm = new Pixmap(64, 16, Pixmap.Format.RGBA8888);
@@ -1406,8 +1483,7 @@ public class GameScreen implements Screen {
             pm.fillRectangle(0, 0, 64, 3);
             pm.setColor(new Color(0.10f, 0.10f, 0.12f, 1f));
             pm.drawRectangle(0, 0, 64, 16);
-            platformWoodTexture = new Texture(pm);
-            pm.dispose();
+            platformWoodTexture = managedTex(pm);
 
             // Vách lũy pháo đài đá hộc thô ráp kiên cố (64x64)
             Pixmap wm = new Pixmap(64, 64, Pixmap.Format.RGBA8888);
@@ -1427,8 +1503,7 @@ public class GameScreen implements Screen {
                     wm.fillRectangle(28, yOff + 4, 8, 8);
                 }
             }
-            wallTexture = new Texture(wm);
-            wm.dispose();
+            wallTexture = managedTex(wm);
 
         } else {
             // === MAP 1: THÀNH PHỐ CỔ LÚC HOÀNG HÔN (Weathered Castle Stone, Ancient Oak Beams, Medieval Ashlar Walls) ===
@@ -1451,8 +1526,7 @@ public class GameScreen implements Screen {
             }
             gm.setColor(new Color(1.0f, 0.88f, 0.55f, 1f));
             gm.fillRectangle(0, 0, 64, 4);
-            groundBrickTexture = new Texture(gm);
-            gm.dispose();
+            groundBrickTexture = managedTex(gm);
 
             // Xà dầm gỗ sồi cổ nẹp sắt rỉ đinh tán vuông (64x16)
             Pixmap pm = new Pixmap(64, 16, Pixmap.Format.RGBA8888);
@@ -1475,8 +1549,7 @@ public class GameScreen implements Screen {
             pm.fillRectangle(0, 0, 64, 3);
             pm.setColor(new Color(0.16f, 0.09f, 0.04f, 1f));
             pm.drawRectangle(0, 0, 64, 16);
-            platformWoodTexture = new Texture(pm);
-            pm.dispose();
+            platformWoodTexture = managedTex(pm);
 
             // Tường thành đá lũy trung cổ phong hóa (64x64)
             Pixmap wm = new Pixmap(64, 64, Pixmap.Format.RGBA8888);
@@ -1494,8 +1567,7 @@ public class GameScreen implements Screen {
                 wm.setColor(new Color(0.10f, 0.09f, 0.08f, 1f));
                 wm.drawLine(10, yOff + 3, 22, yOff + 12);
             }
-            wallTexture = new Texture(wm);
-            wm.dispose();
+            wallTexture = managedTex(wm);
         }
 
         // Cấu hình Texture lặp vô tận (Repeat) & Nearest pixel art sắc nét chống vỡ hình
@@ -1564,8 +1636,7 @@ public class GameScreen implements Screen {
                 cap.drawPixel(kx, ky);
             }
         }
-        p1CrescentAuraTex = new Texture(cap);
-        cap.dispose();
+        p1CrescentAuraTex = managedTex(cap);
 
         // === 2. CỔ THẦN BINH THẦN KIẾM (P1 Celestial Sword - 96x32) ===
         Pixmap swp = new Pixmap(96, 32, Pixmap.Format.RGBA8888);
@@ -1606,10 +1677,9 @@ public class GameScreen implements Screen {
         swp.fillCircle(11, 16, 4);
         swp.setColor(new Color(0.12f, 0.85f, 1.0f, 1.0f));
         swp.fillCircle(11, 16, 2);
-        p1CelestialSwordTex = new Texture(swp);
+        p1CelestialSwordTex = managedTex(swp);
         p1CelestialSwordTex.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
         p1CelestialSwordRegion = new TextureRegion(p1CelestialSwordTex);
-        swp.dispose();
 
         // === 3. BÁT QUÁI KIẾM TRẬN PHÁT QUANG (P1 Magic Array Circle - 128x128) ===
         Pixmap mgp = new Pixmap(128, 128, Pixmap.Format.RGBA8888);
@@ -1637,9 +1707,8 @@ public class GameScreen implements Screen {
         mgp.fillCircle(mcX, mcY, 6);
         mgp.setColor(new Color(0.15f, 0.90f, 1.0f, 1.0f));
         mgp.drawCircle(mcX, mcY, 12);
-        p1MagicCircleTex = new Texture(mgp);
+        p1MagicCircleTex = managedTex(mgp);
         p1MagicCircleTex.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
-        mgp.dispose();
 
         // === 4. HUYẾT TIÊU KUNAI ÁM KHÍ HẮC ÁM (P2 Kunai Texture - 64x20) ===
         Pixmap knp = new Pixmap(64, 20, Pixmap.Format.RGBA8888);
@@ -1659,10 +1728,9 @@ public class GameScreen implements Screen {
         knp.setColor(new Color(0.42f, 0.44f, 0.48f, 1.0f));
         knp.drawCircle(5, 10, 4);
         knp.drawCircle(5, 10, 3);
-        p2KunaiTex = new Texture(knp);
+        p2KunaiTex = managedTex(knp);
         p2KunaiTex.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
         p2KunaiRegion = new TextureRegion(p2KunaiTex);
-        knp.dispose();
     }
 
     private void createProceduralTextures() {
@@ -1679,8 +1747,7 @@ public class GameScreen implements Screen {
             lm.setColor(new Color(0.65f, 0.42f, 0.22f, 1f));
             lm.fillRectangle(6, y, 20, 4);
         }
-        ladderTexture = new Texture(lm);
-        lm.dispose();
+        ladderTexture = managedTex(lm);
 
         Pixmap hpPm = new Pixmap(48, 48, Pixmap.Format.RGBA8888);
         // Outer pulsing glow aura
@@ -1704,8 +1771,7 @@ public class GameScreen implements Screen {
         // Light reflection highlight
         hpPm.setColor(new Color(1f, 1f, 1f, 0.75f));
         hpPm.fillCircle(19, 21, 3);
-        hpOrbTexture = new Texture(hpPm);
-        hpPm.dispose();
+        hpOrbTexture = managedTex(hpPm);
 
         Pixmap wpm = new Pixmap(48, 48, Pixmap.Format.RGBA8888);
         // Ambient golden aura
@@ -1731,9 +1797,8 @@ public class GameScreen implements Screen {
         wpm.fillCircle(24, 25, 4);
         wpm.setColor(Color.WHITE);
         wpm.fillCircle(24, 25, 2);
-        weaponBoxTexture = new Texture(wpm);
+        weaponBoxTexture = managedTex(wpm);
         weaponBoxRegion = new TextureRegion(weaponBoxTexture);
-        wpm.dispose();
 
         Pixmap ar = new Pixmap(36, 12, Pixmap.Format.RGBA8888);
         // Azure glowing energy trail & arrowhead
@@ -1745,9 +1810,8 @@ public class GameScreen implements Screen {
         ar.fillTriangle(26, 0, 36, 6, 26, 12);
         ar.setColor(Color.WHITE);
         ar.fillTriangle(28, 3, 34, 6, 28, 9);
-        arrowTexture = new Texture(ar);
+        arrowTexture = managedTex(ar);
         arrowRegion = new TextureRegion(arrowTexture);
-        ar.dispose();
 
         Pixmap bl = new Pixmap(16, 16, Pixmap.Format.RGBA8888);
         bl.setColor(new Color(1f, 0.4f, 0.05f, 0.45f));
@@ -1756,8 +1820,7 @@ public class GameScreen implements Screen {
         bl.fillCircle(8, 8, 5);
         bl.setColor(Color.WHITE);
         bl.fillCircle(8, 8, 3);
-        bulletTexture = new Texture(bl);
-        bl.dispose();
+        bulletTexture = managedTex(bl);
 
         Pixmap uom = new Pixmap(44, 44, Pixmap.Format.RGBA8888);
         uom.setColor(new Color(0.95f, 0.75f, 0.1f, 0.45f));
@@ -1768,47 +1831,41 @@ public class GameScreen implements Screen {
         uom.fillCircle(22, 22, 10);
         uom.setColor(Color.WHITE);
         uom.fillCircle(22, 22, 5);
-        ultimateOrbTexture = new Texture(uom);
-        uom.dispose();
+        ultimateOrbTexture = managedTex(uom);
 
         Pixmap rp = new Pixmap(8, 32, Pixmap.Format.RGBA8888);
         rp.setColor(new Color(0.6f, 0.42f, 0.2f, 1f));
         rp.fill();
-        ropeTexture = new Texture(rp);
+        ropeTexture = managedTex(rp);
         ropeRegion = new TextureRegion(ropeTexture);
-        rp.dispose();
 
         Pixmap cPm = new Pixmap(48, 32, Pixmap.Format.RGBA8888);
         cPm.setColor(new Color(0.2f, 0.2f, 0.25f, 1f));
         cPm.fillRectangle(8, 6, 36, 16);
         cPm.setColor(new Color(0.6f, 0.4f, 0.2f, 1f));
         cPm.fillCircle(12, 22, 9);
-        cannonTexture = new Texture(cPm);
-        cPm.dispose();
+        cannonTexture = managedTex(cPm);
 
         Pixmap cbPm = new Pixmap(24, 24, Pixmap.Format.RGBA8888);
         cbPm.setColor(Color.BLACK);
         cbPm.fillCircle(12, 12, 11);
         cbPm.setColor(Color.ORANGE);
         cbPm.fillCircle(8, 8, 4);
-        cannonBallTexture = new Texture(cbPm);
-        cbPm.dispose();
+        cannonBallTexture = managedTex(cbPm);
 
         Pixmap spPm = new Pixmap(12, 12, Pixmap.Format.RGBA8888);
         spPm.setColor(new Color(0.55f, 0.4f, 0.25f, 1f));
         spPm.fillCircle(6, 6, 5);
         spPm.setColor(Color.WHITE);
         spPm.fillCircle(4, 4, 2);
-        slingshotPelletTexture = new Texture(spPm);
-        spPm.dispose();
+        slingshotPelletTexture = managedTex(spPm);
 
         Pixmap flagPm = new Pixmap(36, 64, Pixmap.Format.RGBA8888);
         flagPm.setColor(Color.GOLD);
         flagPm.fillTriangle(6, 6, 34, 20, 6, 34);
         flagPm.setColor(Color.DARK_GRAY);
         flagPm.fillRectangle(2, 4, 4, 60);
-        finishFlagTexture = new Texture(flagPm);
-        flagPm.dispose();
+        finishFlagTexture = managedTex(flagPm);
 
         Pixmap reticlePm = new Pixmap(48, 48, Pixmap.Format.RGBA8888);
         reticlePm.setColor(Color.RED);
@@ -1822,10 +1879,9 @@ public class GameScreen implements Screen {
         reticlePm.fillRectangle(22, 38, 4, 10);
         reticlePm.fillRectangle(0, 22, 10, 4);
         reticlePm.fillRectangle(38, 22, 10, 4);
-        lockOnTexture = new Texture(reticlePm);
+        lockOnTexture = managedTex(reticlePm);
         lockOnTexture.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
         lockOnRegion = new TextureRegion(lockOnTexture);
-        reticlePm.dispose();
 
         // 5v5 Jump Pad Texture (Bệ phóng nảy cao Parkour)
         Pixmap jpm = new Pixmap(48, 16, Pixmap.Format.RGBA8888);
@@ -1836,8 +1892,7 @@ public class GameScreen implements Screen {
         jpm.fillTriangle(24, 0, 16, 8, 32, 8);
         jpm.fillTriangle(14, 2, 8, 8, 20, 8);
         jpm.fillTriangle(34, 2, 28, 8, 40, 8);
-        jumpPadTexture = new Texture(jpm);
-        jpm.dispose();
+        jumpPadTexture = managedTex(jpm);
 
         // 5v5 Contested Runes
         // 1. Cuồng Nộ (Berserk Flame Rune)
@@ -1850,8 +1905,7 @@ public class GameScreen implements Screen {
         berPm.fillTriangle(20, 4, 12, 28, 28, 28);
         berPm.setColor(Color.YELLOW);
         berPm.fillTriangle(20, 10, 15, 26, 25, 26);
-        runeBerserkTex = new Texture(berPm);
-        berPm.dispose();
+        runeBerserkTex = managedTex(berPm);
 
         // 2. Khiên Hộ Thể (Divine Barrier Shield Rune)
         Pixmap shiPm = new Pixmap(40, 40, Pixmap.Format.RGBA8888);
@@ -1864,8 +1918,7 @@ public class GameScreen implements Screen {
         shiPm.fillTriangle(12, 22, 28, 22, 20, 32);
         shiPm.setColor(Color.WHITE);
         shiPm.fillCircle(20, 18, 4);
-        runeShieldTex = new Texture(shiPm);
-        shiPm.dispose();
+        runeShieldTex = managedTex(shiPm);
 
         // 3. Bùa Phong Tốc (Windstride Rune)
         Pixmap windPm = new Pixmap(40, 40, Pixmap.Format.RGBA8888);
@@ -1877,8 +1930,7 @@ public class GameScreen implements Screen {
         windPm.fillRectangle(8, 14, 20, 3);
         windPm.fillRectangle(12, 20, 20, 3);
         windPm.fillRectangle(10, 26, 16, 3);
-        runeWindTex = new Texture(windPm);
-        windPm.dispose();
+        runeWindTex = managedTex(windPm);
 
         // 4. Thần Dược Hồi Phục (Ancient Mega Heal Relic)
         Pixmap healPm = new Pixmap(40, 40, Pixmap.Format.RGBA8888);
@@ -1889,8 +1941,7 @@ public class GameScreen implements Screen {
         healPm.setColor(Color.WHITE);
         healPm.fillRectangle(17, 8, 6, 24);
         healPm.fillRectangle(8, 17, 24, 6);
-        runeHealTex = new Texture(healPm);
-        healPm.dispose();
+        runeHealTex = managedTex(healPm);
 
         // 5. Ngọc Tối Thượng Thần Bí (Random Ultimate Orb)
         Pixmap ultPm = new Pixmap(44, 44, Pixmap.Format.RGBA8888);
@@ -1902,14 +1953,12 @@ public class GameScreen implements Screen {
         ultPm.fillCircle(22, 22, 9);
         ultPm.setColor(Color.WHITE);
         ultPm.fillCircle(22, 22, 4);
-        runeUltTex = new Texture(ultPm);
-        ultPm.dispose();
+        runeUltTex = managedTex(ultPm);
 
         Pixmap spkPix = new Pixmap(12, 12, Pixmap.Format.RGBA8888);
         spkPix.setColor(Color.WHITE);
         spkPix.fillCircle(6, 6, 5);
-        sparkTexture = new Texture(spkPix);
-        spkPix.dispose();
+        sparkTexture = managedTex(spkPix);
 
         // 6. Bụi rậm chiến thuật (Tactical Ambush Bush Texture)
         Pixmap bshPm = new Pixmap(64, 48, Pixmap.Format.RGBA8888);
@@ -1929,8 +1978,7 @@ public class GameScreen implements Screen {
         bshPm.fillCircle(15, 14, 2);
         bshPm.fillCircle(48, 12, 2);
         bshPm.fillCircle(32, 8, 2);
-        bushTexture = new Texture(bshPm);
-        bshPm.dispose();
+        bushTexture = managedTex(bshPm);
 
         // 7. Tháp trụ tiền đồn phòng ngự (Tactical Defense Outpost Turret Texture)
         Pixmap turPm = new Pixmap(40, 80, Pixmap.Format.RGBA8888);
@@ -1951,8 +1999,7 @@ public class GameScreen implements Screen {
         turPm.fillCircle(20, 12, 6);
         turPm.setColor(Color.WHITE);
         turPm.fillCircle(20, 12, 3);
-        turretTexture = new Texture(turPm);
-        turPm.dispose();
+        turretTexture = managedTex(turPm);
 
         // 8. Trùm Thần Thú Bạo Chúa (Ancient Titan Boss Texture)
         Pixmap titPm = new Pixmap(64, 64, Pixmap.Format.RGBA8888);
@@ -1982,8 +2029,7 @@ public class GameScreen implements Screen {
         titPm.setColor(Color.WHITE);
         titPm.fillCircle(26, 24, 2);
         titPm.fillCircle(38, 24, 2);
-        titanBossTexture = new Texture(titPm);
-        titPm.dispose();
+        titanBossTexture = managedTex(titPm);
 
         // 9. Vòng tròn thần thánh hồi máu Hồ Máu (Fountain Healing Sanctum Aura)
         Pixmap fntPm = new Pixmap(64, 64, Pixmap.Format.RGBA8888);
@@ -1994,8 +2040,7 @@ public class GameScreen implements Screen {
         }
         fntPm.setColor(Color.WHITE);
         fntPm.fillCircle(32, 32, 5);
-        fountainAuraTexture = new Texture(fntPm);
-        fntPm.dispose();
+        fountainAuraTexture = managedTex(fntPm);
 
         // 10. Lớp phủ điện ảnh góc tối (Cinematic Vignette Texture)
         Pixmap vigPm = new Pixmap(128, 128, Pixmap.Format.RGBA8888);
@@ -2011,8 +2056,7 @@ public class GameScreen implements Screen {
                 }
             }
         }
-        vignetteTexture = new Texture(vigPm);
-        vigPm.dispose();
+        vignetteTexture = managedTex(vigPm);
     }
 
     private void spawnHitSparks(float cx, float cy, int count, Color baseColor) {
@@ -2750,7 +2794,7 @@ public class GameScreen implements Screen {
     }
 
     private void updateCollapsingPlatforms(float delta) {
-        if (collapsingPlatforms.size == 0) return;
+        if (collapsingPlatforms.size == 0 || inCutscene() || isPaused) return;
         Vector2 pos = (playerBody != null) ? playerBody.getPosition() : null;
         for (int i = 0; i < collapsingPlatforms.size; i++) {
             CollapsingPlatform cp = collapsingPlatforms.get(i);
@@ -2787,7 +2831,7 @@ public class GameScreen implements Screen {
     }
 
     private void updateCheckpoints() {
-        if (playerBody == null || checkpoints.size == 0) return;
+        if (playerBody == null || checkpoints.size == 0 || playerDead || isMatchEnded) return;
         Vector2 pos = playerBody.getPosition();
         for (int i = 0; i < checkpoints.size; i++) {
             MapCheckpoint cp = checkpoints.get(i);
@@ -2799,8 +2843,9 @@ public class GameScreen implements Screen {
                 actionLog.setText("ĐÃ LƯU CHECKPOINT AN TOÀN!");
                 spawnHitSparks(cp.x, cp.y + 0.5f, 15, Color.GOLD);
                 if (story != null && !freePlay) {
+                    flushUnbankedSoloGold();
                     StorySaveManager.saveProgress(story.chapter, story.stage,
-                        selectedChar, playerHp, goldEarned, score, healthPotions, activeCheckpointX);
+                        selectedChar, playerHp, 0, score, healthPotions, activeCheckpointX);
                 }
             }
         }
@@ -2838,9 +2883,30 @@ public class GameScreen implements Screen {
     private float ledgeHoldTowardTimer = 0f;   // giữ hướng về mép bao lâu -> tự trèo lên (tiện cho cần điều khiển)
     private float ledgeRegrabCooldown = 0f;    // vừa buông tay thì không bám lại ngay mép đó
 
+    private void performLedgeMantle() {
+        if (!isLedgeGrabbing || playerBody == null) return;
+        float mantleX = ledgeGrabX + ledgeGrabFacing * 0.35f;
+        // ledgeGrabY = topY - 0.30f; nửa chiều cao nhân vật là 0.40f -> đặt chân ngay trên topY + 0.02f
+        float mantleY = ledgeGrabY + 0.72f;
+        playerBody.setTransform(mantleX, mantleY, 0);
+        playerBody.setLinearVelocity(ledgeGrabFacing * 1.5f, 2.5f);
+        isLedgeGrabbing = false;
+        ledgeHoldTowardTimer = 0f;
+        ledgeRegrabCooldown = 0.30f;
+        jumpCount = 0;
+        SoundManager.getInstance().playJump();
+        actionLog.setText("BÁM MÉP & TRÈO LÊN THÀNH CÔNG!");
+    }
+
     private void checkLedgeGrab(float delta, boolean kUp, boolean padUp, boolean kJump, boolean movingLeft, boolean movingRight) {
         if (ledgeRegrabCooldown > 0f) ledgeRegrabCooldown -= delta;
-        if (playerDead || isAssassinating || isDashing || isSwinging || isWallClinging || isEagleStriking || playerBody == null) return;
+        if (playerDead || isAssassinating || isDashing || isSwinging || isWallClinging || isEagleStriking
+            || playerStunTimer > 0f || isGrabbedByPirate || isP1UltActive || isP2DashingAssassinate
+            || inCutscene() || playerBody == null) {
+            isLedgeGrabbing = false;
+            ledgeHoldTowardTimer = 0f;
+            return;
+        }
         Vector2 pos = playerBody.getPosition();
         Vector2 vel = playerBody.getLinearVelocity();
 
@@ -2853,22 +2919,14 @@ public class GameScreen implements Screen {
             boolean awayFromLedge = (ledgeGrabFacing == 1) ? movingLeft : movingRight;
             ledgeHoldTowardTimer = towardLedge ? ledgeHoldTowardTimer + delta : 0f;
 
-            boolean wantsMantle = kUp || padUp || kJump || Gdx.input.isKeyJustPressed(Input.Keys.SPACE) || Gdx.input.isKeyJustPressed(Input.Keys.W)
-                || ledgeHoldTowardTimer >= 0.25f;
-            float knobY = (touchpad != null) ? touchpad.getKnobPercentY() : 0f;
-            // Trước đây chỉ XUỐNG mới buông được: kéo cần sang ngang vẫn treo ở mép -> người chơi tưởng bị kẹt tường
-            boolean wantsDrop = Gdx.input.isKeyPressed(Input.Keys.S) || Gdx.input.isKeyPressed(Input.Keys.DOWN) || knobY < -0.4f || awayFromLedge;
+            boolean keysAllowed = !isPaused && !isChatTyping();
+            boolean wantsMantle = kUp || padUp || kJump || ledgeHoldTowardTimer >= 0.25f;
+            float knobY = (touchpad != null && touchpad.isVisible()) ? touchpad.getKnobPercentY() : 0f;
+            boolean wantsDrop = (keysAllowed && (Gdx.input.isKeyPressed(Input.Keys.S) || Gdx.input.isKeyPressed(Input.Keys.DOWN)))
+                || knobY < -0.4f || awayFromLedge;
 
             if (wantsMantle) {
-                float mantleX = ledgeGrabX + ledgeGrabFacing * 0.35f;
-                float mantleY = ledgeGrabY + 0.45f;
-                playerBody.setTransform(mantleX, mantleY, 0);
-                playerBody.setLinearVelocity(ledgeGrabFacing * 1.5f, 2.5f);
-                isLedgeGrabbing = false;
-                isGrounded = true;
-                jumpCount = 0;
-                SoundManager.getInstance().playJump();
-                actionLog.setText("BÁM MÉP & TRÈO LÊN THÀNH CÔNG!");
+                performLedgeMantle();
             } else if (wantsDrop) {
                 isLedgeGrabbing = false;
                 ledgeHoldTowardTimer = 0f;
@@ -2890,6 +2948,7 @@ public class GameScreen implements Screen {
                 ledgeGrabX = p.x - 0.22f;
                 ledgeGrabY = topY - 0.30f;
                 ledgeGrabFacing = 1;
+                ledgeHoldTowardTimer = 0f;
                 playerBody.setLinearVelocity(0, 0);
                 SoundManager.getInstance().playWallJump();
                 actionLog.setText("BÁM ĐƯỢC MÉP BỤC! Giữ hướng/LÊN/NHẢY để trèo, đẩy ngược lại để buông.");
@@ -2900,6 +2959,7 @@ public class GameScreen implements Screen {
                 ledgeGrabX = p.x + p.width + 0.22f;
                 ledgeGrabY = topY - 0.30f;
                 ledgeGrabFacing = -1;
+                ledgeHoldTowardTimer = 0f;
                 playerBody.setLinearVelocity(0, 0);
                 SoundManager.getInstance().playWallJump();
                 actionLog.setText("BÁM ĐƯỢC MÉP BỤC! Giữ hướng/LÊN/NHẢY để trèo, đẩy ngược lại để buông.");
@@ -2915,6 +2975,7 @@ public class GameScreen implements Screen {
 
         activeCheckpointX = 3.0f;
         activeCheckpointY = 1.2f;
+        cannonPos.set(40.0f, 4.30f);
 
         if (chapter == 1) {
             // === CHƯƠNG 1: THÀNH CỔ THỜI CHIẾN ===
@@ -2923,10 +2984,10 @@ public class GameScreen implements Screen {
                 createPlatform(9.0f, 0.65f, 18.0f, 0.65f, true); // 0 -> 18m
                 createPlatform(20.5f, 1.30f, 2.5f, 0.65f, false); // Thùng hàng 19.25 -> 21.75
                 createPlatform(28.0f, 0.65f, 10.0f, 0.65f, true); // Nền đá 23 -> 33m
-                createPlatform(36.0f, 2.60f, 5.0f, 0.25f, false); // Ban công 33.5 -> 38.5
-                laddersList.add(new Ladder(34.0f, 0.65f, 0.5f, 1.95f));
-                createPlatform(43.5f, 3.80f, 5.5f, 0.25f, false); // Mái nhà cao 40.75 -> 46.25
-                laddersList.add(new Ladder(41.5f, 2.60f, 0.5f, 1.20f));
+                createPlatform(35.25f, 2.60f, 6.5f, 0.25f, false); // Ban công 32.0 -> 38.5
+                laddersList.add(new Ladder(32.5f, 0.65f, 0.5f, 1.95f));
+                createPlatform(42.25f, 3.80f, 8.0f, 0.25f, false); // Mái nhà cao 38.25 -> 46.25
+                laddersList.add(new Ladder(38.0f, 2.60f, 0.5f, 1.20f));
                 createObstacleWall(48.0f, 0.65f, 1.2f, 2.8f);
                 createPlatform(55.0f, 0.65f, 12.0f, 0.65f, true); // Sân giữa 49 -> 61m
                 checkpoints.add(new MapCheckpoint(51.0f, 1.0f));
@@ -2945,8 +3006,8 @@ public class GameScreen implements Screen {
                 createPlatform(59.0f, 0.65f, 14.0f, 0.65f, true); // Sân dưới 52 -> 66m
                 createPlatform(57.0f, 1.65f, 6.0f, 0.40f, false); // Cổng kẹt chui thấp (cúi người chui qua)
                 checkpoints.add(new MapCheckpoint(63.0f, 1.0f));
-                createPlatform(71.0f, 2.40f, 6.0f, 0.25f, false); // 68 -> 74m
-                laddersList.add(new Ladder(69.0f, 0.65f, 0.5f, 1.75f));
+                createPlatform(69.5f, 2.40f, 9.0f, 0.25f, false); // 65 -> 74m
+                laddersList.add(new Ladder(65.5f, 0.65f, 0.5f, 1.75f));
                 createPlatform(80.0f, 1.50f, 7.0f, 0.45f, false); // 76.5 -> 83.5m
                 // Sàn kết thúc trải dài tới tận mép mapWidth = 110m:
                 createPlatform(98.0f, 0.65f, 28.0f, 0.65f, true); // 84 -> 112m
@@ -2990,8 +3051,8 @@ public class GameScreen implements Screen {
             } else if (stage == 2) {
                 // Ải 2-2 (mapWidth = 125f): Chiến Thuyền Hắc Ám
                 createPlatform(8.0f, 0.65f, 16.0f, 0.65f, true); // 0 -> 16m
-                createPlatform(20.0f, 3.80f, 5.5f, 0.25f, false); // Cần trục hàng cảng 17.25 -> 22.75
-                laddersList.add(new Ladder(18.0f, 0.65f, 0.5f, 3.15f));
+                createPlatform(19.0f, 3.80f, 7.5f, 0.25f, false); // Cần trục hàng cảng 15.25 -> 22.75
+                laddersList.add(new Ladder(15.5f, 0.65f, 0.5f, 3.15f));
                 addRope(26.5f, 7.5f); // Đu dây cáp cần trục đáp thẳng boong tàu!
                 createPlatform(37.0f, 1.20f, 15.0f, 0.55f, true); // Boong chiến thuyền 1: 29.5 -> 44.5m
                 createPlatform(37.0f, 4.20f, 4.5f, 0.22f, false); // Chòi quan sát trên cột buồm
@@ -3014,9 +3075,9 @@ public class GameScreen implements Screen {
                 createPlatform(41.0f, 0.65f, 10.0f, 0.65f, true); // Trụ cầu vững 36 -> 46m
                 checkpoints.add(new MapCheckpoint(41.0f, 1.0f));
                 createObstacleWall(48.0f, 0.65f, 1.4f, 3.5f); // Cổng sắt quân cảng
-                createPlatform(53.5f, 3.20f, 6.0f, 0.25f, false); // Bục vọng vượt cổng
-                laddersList.add(new Ladder(51.0f, 0.65f, 0.5f, 2.55f));
-                createPlatform(63.0f, 0.65f, 12.0f, 0.65f, true); // Cầu cảng trong 57 -> 69m
+                createPlatform(53.5f, 3.20f, 6.0f, 0.25f, false); // Bục vọng vượt cổng 50.5 -> 56.5
+                createPlatform(62.0f, 0.65f, 14.0f, 0.65f, true); // Cầu cảng trong 55 -> 69m
+                laddersList.add(new Ladder(55.8f, 0.65f, 0.5f, 2.55f));
                 createPlatform(74.0f, 1.50f, 6.0f, 0.35f, false); // Bậc chuyển tiếp 71 -> 77m
                 checkpoints.add(new MapCheckpoint(74.0f, 1.8f));
                 // ĐẠI SÂN QUÂN CẢNG ĐẤU BOSS (79m -> 137m kiên cố liền mạch, không có vực!):
@@ -3036,6 +3097,7 @@ public class GameScreen implements Screen {
                 createPlatform(23.5f, 2.50f, 5.0f, 1.00f, true); // Bậc đá dốc 2: 21 -> 26m
                 createPlatform(31.0f, 3.60f, 5.5f, 1.10f, true); // Bậc đá dốc 3: 28.25 -> 33.75m
                 createObstacleWall(36.0f, 1.00f, 1.2f, 3.5f); // Tường vỡ chắn đường
+                createPlatform(39.5f, 2.00f, 3.2f, 0.35f, false); // Thềm đá chân thang
                 createPlatform(42.0f, 4.50f, 7.0f, 0.25f, false); // Ban công pháo đài 38.5 -> 45.5m
                 laddersList.add(new Ladder(39.5f, 2.00f, 0.5f, 2.50f));
                 checkpoints.add(new MapCheckpoint(43.0f, 4.8f));
@@ -3048,12 +3110,12 @@ public class GameScreen implements Screen {
             } else if (stage == 2) {
                 // Ải 3-2 (mapWidth = 130f): Tử Chiến Trên Vực Thẳm
                 createPlatform(8.0f, 0.65f, 16.0f, 0.65f, true); // 0 -> 16m
-                createPlatform(20.0f, 3.00f, 6.0f, 0.25f, false); // Vách thành 17 -> 23m
-                laddersList.add(new Ladder(18.0f, 0.65f, 0.5f, 2.35f));
+                createPlatform(19.0f, 3.00f, 7.5f, 0.25f, false); // Vách thành 15.25 -> 22.75m
+                laddersList.add(new Ladder(15.5f, 0.65f, 0.5f, 2.35f));
                 addRope(26.5f, 7.2f); // Dây cáp treo vượt vực bão tuyết!
-                createPlatform(34.0f, 3.50f, 7.0f, 0.25f, false); // Bờ vực đón 30.5 -> 37.5m
-                laddersList.add(new Ladder(32.0f, 1.00f, 0.5f, 2.50f));
+                createPlatform(35.0f, 3.50f, 9.0f, 0.25f, false); // Bờ vực đón 30.5 -> 39.5m
                 createPlatform(47.0f, 0.65f, 16.0f, 0.65f, true); // Sân trong 39 -> 55m
+                laddersList.add(new Ladder(39.2f, 0.65f, 0.5f, 2.85f));
                 createPlatform(47.0f, 1.65f, 6.5f, 0.45f, false); // Chui qua lỗ sập tường đá pháo đài
                 checkpoints.add(new MapCheckpoint(52.0f, 1.0f));
                 addRope(59.0f, 6.8f); // Dây đu vượt vực 2
@@ -3064,16 +3126,18 @@ public class GameScreen implements Screen {
                 createPlatform((93.0f + mapWidth + 1.0f) / 2f, 0.65f, mapWidth + 1.0f - 93.0f, 0.65f, true); // 93 -> mapWidth+1
             } else {
                 // Ải 3-3 (mapWidth = 145f): Quyết Đấu Đỉnh Núi (Final Boss: Nhiếp Chính Vương Triệu Vô Cực)
+                cannonPos.set(54.0f, 4.30f); // Đặt vọng pháo trên sân trung tâm 46..61m, tránh đè Tháp canh 40..46m
                 createPlatform(8.0f, 0.65f, 16.0f, 0.65f, true); // 0 -> 16m
                 createPlatform(18.0f, 2.40f, 5.0f, 0.25f, false); // Bậc đá 15.5 -> 20.5m
                 createCollapsingPlatform(24.0f, 3.00f, 3.2f, 0.22f); // Đá sụp 1: 22.4 -> 25.6m
                 createCollapsingPlatform(30.0f, 3.50f, 3.2f, 0.22f); // Đá sụp 2: 28.4 -> 31.6m
                 addRope(36.0f, 7.5f); // Đu dây cáp chịu lực vượt vực thẳm
-                createPlatform(43.0f, 3.80f, 6.0f, 0.25f, false); // Tháp canh 40 -> 46m
-                laddersList.add(new Ladder(41.0f, 1.20f, 0.5f, 2.60f));
+                createPlatform(43.0f, 3.80f, 6.5f, 0.25f, false); // Tháp canh 39.75 -> 46.25m
+                createPlatform(53.5f, 1.20f, 15.0f, 0.55f, true); // Sân trung tâm 46 -> 61m
+                laddersList.add(new Ladder(46.0f, 1.20f, 0.5f, 2.60f));
                 checkpoints.add(new MapCheckpoint(43.0f, 4.0f));
-                createPlatform(54.0f, 1.20f, 14.0f, 0.55f, true); // Sân trung tâm 47 -> 61m
                 createObstacleWall(62.0f, 1.20f, 1.4f, 3.8f); // Cổng sắt vương thành
+                createPlatform(66.0f, 1.20f, 3.2f, 0.35f, false); // Thềm đá chân thang
                 createPlatform(68.0f, 4.00f, 6.5f, 0.25f, false); // Ban công vượt cổng 64.75 -> 71.25m
                 laddersList.add(new Ladder(66.0f, 1.20f, 0.5f, 2.80f));
                 createPlatform(78.0f, 2.00f, 8.0f, 0.45f, true); // Thềm hạ điện 74 -> 82m
@@ -3098,8 +3162,12 @@ public class GameScreen implements Screen {
         laddersList.add(new Ladder(towerX - 0.8f, 0.65f, 0.55f, towerTop - 0.65f));
 
         if (story != null && story.hasFlyingMobs) {
+            float cx = snapToGround(cannonPos.x, 1.8f);
+            MapPlatform cg = groundAt(cx);
+            float baseY = (cg != null) ? (cg.y + cg.height) : 0.65f;
+            cannonPos.set(cx, Math.max(4.30f, baseY + 3.1f));
             createPlatform(cannonPos.x, cannonPos.y - 0.1f, 3.5f, 0.20f, false);
-            laddersList.add(new Ladder(cannonPos.x - 1.0f, 0.65f, 0.5f, 3.50f));
+            laddersList.add(new Ladder(cannonPos.x - 1.0f, baseY, 0.5f, Math.max(1.5f, cannonPos.y - 0.1f - baseY)));
         }
     }
 
@@ -3332,8 +3400,12 @@ public class GameScreen implements Screen {
 
             // Vọng đài đặt pháo (khi ải có lính bay; CO-OP từ ải 2)
             if ((story != null) ? story.hasFlyingMobs : currentLevel >= 2) {
+                float cx = snapToGround(40.0f, 1.8f);
+                MapPlatform cg = groundAt(cx);
+                float baseY = (cg != null) ? (cg.y + cg.height) : 0.65f;
+                cannonPos.set(cx, Math.max(4.30f, baseY + 3.1f));
                 createPlatform(cannonPos.x, cannonPos.y - 0.1f, 3.5f, 0.20f, false);
-                laddersList.add(new Ladder(cannonPos.x - 1.0f, 0.65f, 0.5f, 3.50f));
+                laddersList.add(new Ladder(cannonPos.x - 1.0f, baseY, 0.5f, Math.max(1.5f, cannonPos.y - 0.1f - baseY)));
             }
 
             // Tháp quan sát ở điểm kết thúc
@@ -3528,8 +3600,39 @@ public class GameScreen implements Screen {
         return MathUtils.clamp(x, lo, hi);
     }
 
+    /** Kiểm tra tại tọa độ x có trần hầm chui thấp (< 1.05m so với mặt sàn groundTopY) hay không. */
+    private boolean hasLowCeilingAt(float x, float groundTopY) {
+        for (int i = 0; i < platformsList.size; i++) {
+            MapPlatform p = platformsList.get(i);
+            if (p.isGround) continue;
+            if (x >= p.x - 0.45f && x <= p.x + p.width + 0.45f) {
+                float gap = p.y - groundTopY;
+                if (gap >= 0.05f && gap < 1.05f) return true;
+            }
+        }
+        return false;
+    }
+
+    /** Dời x về sàn mặt đất gần nhất và tránh nằm kẹt trong hầm chui thấp. */
+    private float snapToOpenGround(float x, float margin) {
+        float sx = snapToGround(x, margin);
+        MapPlatform home = groundAt(sx);
+        if (home == null) return sx;
+        float topY = home.y + home.height;
+        if (!hasLowCeilingAt(sx, topY)) return sx;
+        float lo = home.x + Math.min(margin, home.width / 2f);
+        float hi = home.x + home.width - Math.min(margin, home.width / 2f);
+        for (float d = 0.6f; d <= home.width; d += 0.6f) {
+            float rx = sx + d;
+            if (rx <= hi && !hasLowCeilingAt(rx, topY)) return rx;
+            float lx = sx - d;
+            if (lx >= lo && !hasLowCeilingAt(lx, topY)) return lx;
+        }
+        return sx;
+    }
+
     private void spawnGroundMob(boolean isBoss, float spawnX) {
-        spawnX = snapToGround(spawnX, isBoss ? 1.2f : 0.8f);
+        spawnX = snapToOpenGround(spawnX, isBoss ? 1.2f : 0.8f);
         GroundMob m = new GroundMob();
         m.id = nextMobId++;
         m.isBoss = isBoss;
@@ -3545,21 +3648,40 @@ public class GameScreen implements Screen {
         m.scale = isBoss ? 1.75f : 1.0f;
         m.patrolLeft = Math.max(1.0f, isBoss ? (spawnX - 12.0f) : (spawnX - 4.5f));
         m.patrolRight = Math.min(mapWidth - 1.0f, isBoss ? (spawnX + 12.0f) : (spawnX + 4.5f));
-        // Giới hạn vùng tuần tra trong sàn đang đứng để quái không tự đi rơi xuống vực
+        // Giới hạn vùng tuần tra trong sàn đang đứng & tránh đi vào hầm chui thấp (quái đứng cao 0.8m sẽ kẹt cứng)
         MapPlatform home = groundAt(spawnX);
+        float homeTopY = 0.65f;
         if (home != null) {
+            homeTopY = home.y + home.height;
             m.patrolLeft = Math.max(m.patrolLeft, home.x + 0.6f);
             m.patrolRight = Math.min(m.patrolRight, home.x + home.width - 0.6f);
+            for (int pi = 0; pi < platformsList.size; pi++) {
+                MapPlatform p = platformsList.get(pi);
+                if (p.isGround) continue;
+                float gap = p.y - homeTopY;
+                if (gap >= 0.05f && gap < 1.05f) {
+                    if (spawnX >= p.x + p.width) {
+                        m.patrolLeft = Math.max(m.patrolLeft, p.x + p.width + 0.55f);
+                    } else if (spawnX <= p.x) {
+                        m.patrolRight = Math.min(m.patrolRight, p.x - 0.55f);
+                    }
+                }
+            }
+            if (m.patrolLeft > m.patrolRight) {
+                m.patrolLeft = spawnX;
+                m.patrolRight = spawnX;
+            }
         }
 
+        float bw = isBoss ? 0.38f : 0.2f, bh = isBoss ? 0.70f : 0.4f;
         BodyDef bdef = new BodyDef();
-        bdef.position.set(spawnX, 1.2f);
+        // Tính độ cao Y theo chính sàn home (bản cũ cứng y=1.2f khiến quái rơi dưới sàn nâng cao ở ải 2-1, 3-1, 3-3)
+        bdef.position.set(spawnX, homeTopY + bh + 0.08f);
         bdef.type = BodyDef.BodyType.DynamicBody;
         m.body = world.createBody(bdef);
         m.body.setFixedRotation(true);
 
         PolygonShape shape = new PolygonShape();
-        float bw = isBoss ? 0.38f : 0.2f, bh = isBoss ? 0.70f : 0.4f;
         shape.setAsBox(bw, bh);
         FixtureDef fdef = new FixtureDef();
         fdef.shape = shape;
@@ -3581,23 +3703,54 @@ public class GameScreen implements Screen {
     }
 
     private void cleanSocketListeners() {
-        if (socket == null) return;
+        if (socket == null || !networkListenersRegistered) return;
+        networkListenersRegistered = false;
         socket.off("enemyMove");
         socket.off("enemyAction");
         socket.off("playerLeft");
         socket.off("rematchReady");
     }
 
+    private RemotePeer5v5 findExtraPeerById(String id) {
+        if (id == null || id.isEmpty()) return null;
+        for (int i = 0; i < extraPeers5v5.size; i++) {
+            RemotePeer5v5 p = extraPeers5v5.get(i);
+            if (id.equals(p.id)) return p;
+        }
+        return null;
+    }
+
+    private void handleLocalPlayerDeath5v5(String atkName, int atkTeam) {
+        playerDead = true;
+        closeShop();
+        resetTraversalState();
+        if (playerBody != null) {
+            playerDeathX = playerBody.getPosition().x;
+            playerDeathY = playerBody.getPosition().y;
+            playerDeathBlinkTimer = 0.85f;
+        }
+        sendSyncPacket("IDLE");
+        playerRespawnTimer5v5 = 5.0f;
+        int pTeam = (game != null && game.selectedTeam == 2) ? 2 : 1;
+        String safeAtk = (atkName != null && !atkName.isEmpty()) ? atkName : remoteName;
+        int safeTeam = (atkTeam == 1 || atkTeam == 2) ? atkTeam : (pTeam == 1 ? 2 : 1);
+        String myName = (game != null && game.playerName != null && !game.playerName.isEmpty()) ? game.playerName : "Chiến Thần";
+        on5v5Kill(safeAtk, safeTeam, myName, pTeam);
+        broadcast5v5Kill(safeAtk, safeTeam, myName, pTeam);
+    }
+
     private void setupNetworkListeners() {
         if (socket == null || currentGameMode == GameMode.SOLO) return;
         cleanSocketListeners();
+        networkListenersRegistered = true;
 
         socket.on("enemyMove", args -> Gdx.app.postRunnable(() -> {
-            if (isDisposed) return;
+            if (isDisposed || isHidden || (game != null && game.getScreen() != this)) return;
             try {
                 JSONObject data = (JSONObject) args[0];
                 String senderId = data.optString("senderId", "");
                 if (!senderId.isEmpty() && senderId.equals(myNetId)) return;
+                String senderSockId = data.optString("socketId", "");
 
                 float nx = (float) data.getDouble("x");
                 float ny = (float) data.getDouble("y");
@@ -3611,9 +3764,16 @@ public class GameScreen implements Screen {
                     int pktTeam = (data.optInt("team", remoteTeam) == 2) ? 2 : 1;
                     if (primaryRemoteId.isEmpty()) {
                         primaryRemoteId = senderId;
+                        primaryRemoteSocketId = senderSockId;
+                        remoteX = -999f;
+                        remoteDead = false;
+                        remoteDeathBlinkTimer = 0f;
+                        remoteRespawnTimer = 0f;
+                        remoteHitFlashTimer = 0f;
                     } else if (!senderId.equals(primaryRemoteId)) {
                         if (remoteTeam == myTeam && pktTeam != myTeam) {
                             RemotePeer5v5 allyCopy = getOrCreateExtraPeer(primaryRemoteId);
+                            allyCopy.socketId = primaryRemoteSocketId;
                             allyCopy.name = remoteName;
                             allyCopy.team = remoteTeam;
                             allyCopy.charId = remoteCharId;
@@ -3630,10 +3790,39 @@ public class GameScreen implements Screen {
                             allyCopy.dead = remoteDead;
                             allyCopy.inBush = remoteInBush;
                             allyCopy.stealth = remoteStealth;
+                            allyCopy.hitFlashTimer = remoteHitFlashTimer;
+                            allyCopy.deathX = remoteDeathX;
+                            allyCopy.deathY = remoteDeathY;
+                            allyCopy.deathBlinkTimer = remoteDeathBlinkTimer;
+                            allyCopy.respawnTimer = remoteRespawnTimer;
+
+                            // Khôi phục trạng thái của đối thủ vừa thăng lên primaryRemote (tránh dính vị trí/dead của đồng đội cũ)
+                            RemotePeer5v5 existing = findExtraPeerById(senderId);
                             primaryRemoteId = senderId;
-                            removeExtraPeerById(senderId);
+                            primaryRemoteSocketId = senderSockId;
+                            if (existing != null) {
+                                remoteX = existing.x;
+                                remoteY = existing.y;
+                                targetRemoteX = existing.targetX;
+                                targetRemoteY = existing.targetY;
+                                remoteDead = existing.dead;
+                                remoteHitFlashTimer = existing.hitFlashTimer;
+                                remoteDeathX = existing.deathX;
+                                remoteDeathY = existing.deathY;
+                                remoteDeathBlinkTimer = existing.deathBlinkTimer;
+                                remoteRespawnTimer = existing.respawnTimer;
+                                removeExtraPeerById(senderId);
+                            } else {
+                                remoteX = -999f;
+                                remoteY = -999f;
+                                remoteDead = false;
+                                remoteHitFlashTimer = 0f;
+                                remoteDeathBlinkTimer = 0f;
+                                remoteRespawnTimer = 0f;
+                            }
                         } else {
                             RemotePeer5v5 peer = getOrCreateExtraPeer(senderId);
+                            if (!senderSockId.isEmpty()) peer.socketId = senderSockId;
                             boolean wasPeerDead = peer.dead;
                             peer.targetX = nx;
                             peer.targetY = ny;
@@ -3675,6 +3864,7 @@ public class GameScreen implements Screen {
                     }
                 }
 
+                if (!senderSockId.isEmpty()) primaryRemoteSocketId = senderSockId;
                 boolean wasDead = remoteDead;
                 targetRemoteX = nx;
                 targetRemoteY = ny;
@@ -3742,7 +3932,7 @@ public class GameScreen implements Screen {
         }));
 
         socket.on("enemyAction", args -> Gdx.app.postRunnable(() -> {
-            if (isDisposed) return;
+            if (isDisposed || isHidden || (game != null && game.getScreen() != this)) return;
             try {
                 JSONObject data = (JSONObject) args[0];
                 String action = data.getString("type");
@@ -3768,6 +3958,15 @@ public class GameScreen implements Screen {
                         data.optInt("killerTeam", 1),
                         data.optString("victimName", "Chiến Thần"),
                         data.optInt("victimTeam", 2));
+                    return;
+                }
+                if ("cloneSwap".equals(action)) {
+                    if (remoteCloneActive) {
+                        remoteCloneX = (float) data.optDouble("x", remoteCloneX);
+                        remoteCloneY = (float) data.optDouble("y", remoteCloneY);
+                        remoteCloneFacing = data.optInt("facing", remoteCloneFacing);
+                        spawnHitSparks(remoteCloneX, remoteCloneY + 0.3f, 14, Color.PURPLE);
+                    }
                     return;
                 }
 
@@ -3807,14 +4006,29 @@ public class GameScreen implements Screen {
                             int atkTeamCheck = data.optInt("attackerTeam", 0);
                             if (atkTeamCheck == pTeamCheck) return;
                         }
-                        int dmg = data.getInt("damage");
-                        // Cơ chế Phản Chấn Sấm Sét của Lôi Phong Hộ Thể (P1 Chiêu 2)
-                        if (p1WindShieldTimer > 0f && remoteX != -999f) {
-                            int counterDmg = Math.max(15, (int)(dmg * 0.35f));
-                            sendActionPacket("hit", counterDmg, 0);
-                            spawnHitSparks(remoteX, remoteY + 0.3f, 18, Color.GOLD);
-                            addCustomText(remoteX, remoteY + 0.8f, "PHẢN CHẤN LÔI ĐIỆN!", Color.GOLD);
-                            SoundManager.getInstance().playTrangUltimate();
+                        int dmg = Math.max(0, data.optInt("damage", 0));
+                        boolean noReflect = data.optBoolean("noReflect", false);
+                        boolean poisonHit = data.optBoolean("poison", false);
+                        if (poisonHit) {
+                            playerPoisonSlowTimer = 2.5f;
+                            addCustomText(playerBody.getPosition().x, playerBody.getPosition().y + 0.9f, "TRÚNG ĐỘC (-35% TỐC)!", Color.PURPLE);
+                        }
+                        // Cơ chế Phản Chấn Sấm Sét của Lôi Phong Hộ Thể (P1 Chiêu 2): không phản chấn lại đòn phản chấn!
+                        if (!noReflect && p1WindShieldTimer > 0f) {
+                            String atkId = data.optString("senderId", primaryRemoteId);
+                            float fx = remoteX, fy = remoteY;
+                            RemotePeer5v5 atkPeer = findExtraPeerById(atkId);
+                            if (atkPeer != null && atkPeer.x != -999f) {
+                                fx = atkPeer.x;
+                                fy = atkPeer.y;
+                            }
+                            if (fx != -999f) {
+                                int counterDmg = Math.max(15, (int)(dmg * 0.35f));
+                                sendActionPacketFull("hit", counterDmg, 0, atkId, true, false);
+                                spawnHitSparks(fx, fy + 0.3f, 18, Color.GOLD);
+                                addCustomText(fx, fy + 0.8f, "PHẢN CHẤN LÔI ĐIỆN!", Color.GOLD);
+                                SoundManager.getInstance().playTrangUltimate();
+                            }
                         }
                         if (playerShield > 0) {
                             if (playerShield >= dmg) { playerShield -= dmg; dmg = 0; }
@@ -3831,22 +4045,21 @@ public class GameScreen implements Screen {
                         actionLog.setText("Bạn bị đối thủ chém! -" + dmg + " HP");
                         sendSyncPacket(lastSentAnim.isEmpty() ? "IDLE" : lastSentAnim);
                         if (playerHp <= 0) {
-                            playerDead = true;
-                            if (playerBody != null) {
-                                playerDeathX = playerBody.getPosition().x;
-                                playerDeathY = playerBody.getPosition().y;
-                                playerDeathBlinkTimer = 0.85f;
-                            }
-                            sendSyncPacket("IDLE");
                             if (currentGameMode == GameMode.BATTLE_5V5) {
-                                playerRespawnTimer5v5 = 5.0f;
                                 int pTeam = (game != null && game.selectedTeam == 2) ? 2 : 1;
                                 String atkName = data.optString("attackerName", remoteName);
                                 int atkTeam = data.optInt("attackerTeam", pTeam == 1 ? 2 : 1);
-                                String myName = (game != null && game.playerName != null && !game.playerName.isEmpty()) ? game.playerName : "Chiến Thần";
-                                on5v5Kill(atkName, atkTeam, myName, pTeam);
-                                broadcast5v5Kill(atkName, atkTeam, myName, pTeam);
+                                handleLocalPlayerDeath5v5(atkName, atkTeam);
                             } else {
+                                playerDead = true;
+                                closeShop();
+                                resetTraversalState();
+                                if (playerBody != null) {
+                                    playerDeathX = playerBody.getPosition().x;
+                                    playerDeathY = playerBody.getPosition().y;
+                                    playerDeathBlinkTimer = 0.85f;
+                                }
+                                sendSyncPacket("IDLE");
                                 showGameOverDialog(false);
                             }
                         }
@@ -3855,12 +4068,12 @@ public class GameScreen implements Screen {
                     if ("revive".equals(action) && playerDead) {
                         playerDead = false;
                         playerHp = playerMaxHp;
-                        playerHpBar.setMaxHp(playerMaxHp);
-                        playerHpBar.setHp(playerMaxHp);
+                        playerHpBar.resetHp(playerMaxHp, playerMaxHp);
                         lblPlayerHp.setText("Máu: " + playerMaxHp + " HP");
                         actionLog.setText("ĐỒNG ĐỘI ĐÃ CỨU BẠN!");
                         setGameOverDialogVisible(false);
                         isMatchEnded = false;
+                        resetTraversalState();
                         playerBody.setTransform(remoteX, remoteY + 1.0f, 0);
                         playerBody.setLinearVelocity(0, 0);
                     } else if ("mobHit".equals(action)) {
@@ -3879,19 +4092,79 @@ public class GameScreen implements Screen {
             } catch (Exception ignored) {}
         }));
 
-        socket.on("rematchReady", args -> Gdx.app.postRunnable(this::restartOrReturnLobby));
+        socket.on("rematchReady", args -> Gdx.app.postRunnable(() -> {
+            if (isDisposed || isHidden || (game != null && game.getScreen() != this)) return;
+            restartOrReturnLobby();
+        }));
 
         socket.on("playerLeft", args -> Gdx.app.postRunnable(() -> {
-            if (isDisposed || isMatchEnded) return;
+            if (isDisposed || isHidden || (game != null && game.getScreen() != this) || isMatchEnded) return;
             if (currentGameMode == GameMode.PVP) {
                 actionLog.setText("Đối thủ đã rời phòng! Bạn chiến thắng.");
                 showGameOverDialog(true);
             } else if (currentGameMode == GameMode.COOP) {
                 partnerLeft = true;
+                remoteX = -999f;
+                remoteY = -999f;
+                targetRemoteX = -999f;
+                targetRemoteY = -999f;
                 actionLog.setText("Đồng đội đã thoát trận!");
                 partnerHpBar.setVisible(false);
                 lblPartnerHp.setVisible(false);
+                if (btnRevivePartner != null) btnRevivePartner.setVisible(false);
             } else if (currentGameMode == GameMode.BATTLE_5V5) {
+                String leftSockId = "";
+                if (args != null && args.length > 0 && args[0] instanceof JSONObject) {
+                    leftSockId = ((JSONObject) args[0]).optString("id", "");
+                }
+                if (!leftSockId.isEmpty()) {
+                    for (int i = extraPeers5v5.size - 1; i >= 0; i--) {
+                        if (leftSockId.equals(extraPeers5v5.get(i).socketId)) {
+                            extraPeers5v5.removeIndex(i);
+                        }
+                    }
+                    if (leftSockId.equals(primaryRemoteSocketId)) {
+                        primaryRemoteId = "";
+                        primaryRemoteSocketId = "";
+                        remoteX = -999f;
+                        remoteY = -999f;
+                        targetRemoteX = -999f;
+                        targetRemoteY = -999f;
+                        remoteDead = true;
+                        // Thăng 1 người chơi còn lại trong extraPeers5v5 (ưu tiên đối thủ khác phe) lên primaryRemote
+                        if (extraPeers5v5.size > 0) {
+                            int myTeam = (game != null && game.selectedTeam == 2) ? 2 : 1;
+                            int pickIdx = 0;
+                            for (int i = 0; i < extraPeers5v5.size; i++) {
+                                if (extraPeers5v5.get(i).team != myTeam) { pickIdx = i; break; }
+                            }
+                            RemotePeer5v5 nextP = extraPeers5v5.removeIndex(pickIdx);
+                            primaryRemoteId = nextP.id;
+                            primaryRemoteSocketId = nextP.socketId;
+                            remoteName = nextP.name;
+                            remoteTeam = nextP.team;
+                            remoteCharId = nextP.charId;
+                            remoteWeapon = nextP.weapon;
+                            remoteX = nextP.x;
+                            remoteY = nextP.y;
+                            targetRemoteX = nextP.targetX;
+                            targetRemoteY = nextP.targetY;
+                            remoteFacing = nextP.facing;
+                            remoteAnimState = nextP.animState;
+                            remoteAttackAnimTime = nextP.attackAnimTime;
+                            remoteHp = nextP.hp;
+                            remoteShield = nextP.shield;
+                            remoteDead = nextP.dead;
+                            remoteInBush = nextP.inBush;
+                            remoteStealth = nextP.stealth;
+                            remoteHitFlashTimer = nextP.hitFlashTimer;
+                            remoteDeathX = nextP.deathX;
+                            remoteDeathY = nextP.deathY;
+                            remoteDeathBlinkTimer = nextP.deathBlinkTimer;
+                            remoteRespawnTimer = nextP.respawnTimer;
+                        }
+                    }
+                }
                 actionLog.setText("Một người chơi đã rời đấu trường 5v5.");
             }
         }));
@@ -3900,11 +4173,18 @@ public class GameScreen implements Screen {
         sendSyncPacket("IDLE");
     }
 
-    private RemotePeer5v5 getOrCreateExtraPeer(String id) {
+    private RemotePeer5v5 findExtraPeer(String id) {
+        if (id == null || id.isEmpty()) return null;
         for (int i = 0; i < extraPeers5v5.size; i++) {
             RemotePeer5v5 p = extraPeers5v5.get(i);
             if (id.equals(p.id)) return p;
         }
+        return null;
+    }
+
+    private RemotePeer5v5 getOrCreateExtraPeer(String id) {
+        RemotePeer5v5 existing = findExtraPeer(id);
+        if (existing != null) return existing;
         RemotePeer5v5 created = new RemotePeer5v5();
         created.id = id;
         extraPeers5v5.add(created);
@@ -3924,6 +4204,7 @@ public class GameScreen implements Screen {
             try {
                 JSONObject packet = new JSONObject();
                 packet.put("senderId", myNetId);
+                packet.put("socketId", socket.id() != null ? socket.id() : "");
                 packet.put("x", (playerDead && currentGameMode == GameMode.BATTLE_5V5) ? playerDeathX : playerBody.getPosition().x);
                 packet.put("y", (playerDead && currentGameMode == GameMode.BATTLE_5V5) ? playerDeathY : playerBody.getPosition().y);
                 packet.put("facing", playerFacing);
@@ -3943,16 +4224,23 @@ public class GameScreen implements Screen {
     }
 
     private void sendActionPacket(String type, int damage, int targetIndex) {
-        sendActionPacketToPeer(type, damage, targetIndex, primaryRemoteId);
+        sendActionPacketFull(type, damage, targetIndex, primaryRemoteId, false, false);
     }
 
     private void sendActionPacketToPeer(String type, int damage, int targetIndex, String targetPeerId) {
+        sendActionPacketFull(type, damage, targetIndex, targetPeerId, false, false);
+    }
+
+    private void sendActionPacketFull(String type, int damage, int targetIndex, String targetPeerId, boolean noReflect, boolean poison) {
         if (socket != null && socket.connected()) {
             try {
                 JSONObject packet = new JSONObject();
                 packet.put("type", type);
                 packet.put("damage", damage);
                 packet.put("index", targetIndex);
+                packet.put("senderId", myNetId);
+                if (noReflect) packet.put("noReflect", true);
+                if (poison) packet.put("poison", true);
                 if (targetPeerId != null && !targetPeerId.isEmpty()) {
                     packet.put("targetId", targetPeerId);
                 }
@@ -3961,6 +4249,20 @@ public class GameScreen implements Screen {
                     packet.put("attackerTeam", (game != null && game.selectedTeam == 2) ? 2 : 1);
                 }
                 socket.emit("playerAction", packet);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    private void broadcastCloneSwap(float cloneX, float cloneY, int facing) {
+        if (socket != null && socket.connected()) {
+            try {
+                JSONObject pkt = new JSONObject();
+                pkt.put("type", "cloneSwap");
+                pkt.put("x", cloneX);
+                pkt.put("y", cloneY);
+                pkt.put("facing", facing);
+                pkt.put("senderId", myNetId);
+                socket.emit("playerAction", pkt);
             } catch (Exception ignored) {}
         }
     }
@@ -4019,14 +4321,13 @@ public class GameScreen implements Screen {
 
     private void executeRemoteSkill(String senderId, String senderName, int senderTeam, int charId, int slot, float castX, float castY, int castFacing) {
         if (slot < 0 || slot > 2) return;
-        float timeDmgScale = 1.0f + (totalMatchTime / 60f) * 0.22f;
+        // Hiệu ứng kỹ năng của người chơi khác chỉ hiển thị hình ảnh (sát thương đã do máy tung chiêu gửi qua gói "hit"/"mobHit")
 
         if (charId == 1) {
             // === VÂN TIÊU (P1 - PHONG NHẪN / LÔI PHONG / VẠN KIẾM) ===
             if (slot == 0) {
-                int dmg = (int)(110 * timeDmgScale);
                 Projectile wave = new Projectile(castX + castFacing * 0.55f, castY + 0.28f,
-                    castFacing * 14.5f, 0f, dmg, true, false, false, false);
+                    castFacing * 14.5f, 0f, 0, true, false, false, false);
                 wave.skillVisualType = 1;
                 wave.piercing = true;
                 wave.lifeTime = 1.45f;
@@ -4056,15 +4357,14 @@ public class GameScreen implements Screen {
         } else {
             // === VÂN U (P2 - HUYẾT TIÊU / PHÂN THÂN / HUYẾT TRẬN) ===
             if (slot == 0) {
-                int dmg = (int)(72 * timeDmgScale);
                 float[] angles = new float[]{-0.20f, 0f, 0.20f};
                 for (float ang : angles) {
                     float vx = castFacing * (float) Math.cos(ang) * 14.0f;
                     float vy = (float) Math.sin(ang) * 14.0f;
                     Projectile blade = new Projectile(castX + castFacing * 0.50f, castY + 0.32f,
-                        vx, vy, dmg, true, false, false, false);
+                        vx, vy, 0, true, false, false, false);
                     blade.skillVisualType = 3;
-                    blade.applyPoison = true;
+                    blade.applyPoison = false;
                     blade.lifeTime = 1.45f;
                     blade.fromRemotePeer = true;
                     blade.ownerTeam = senderTeam;
@@ -4161,10 +4461,15 @@ public class GameScreen implements Screen {
 
     private static boolean isDesktopPlatform() {
         return Gdx.app.getType() == Application.ApplicationType.Desktop
-            || Gdx.app.getType() == Application.ApplicationType.WebGL;
+            || (Gdx.app.getType() == Application.ApplicationType.WebGL && !TextInputBridge.isTouchPromptActive());
     }
 
     private void applyTouchHudVisibility(boolean gameplayVisible) {
+        if (!gameplayVisible) {
+            if (uiStage != null) uiStage.cancelTouchFocus();
+            isAttackButtonPressed = false;
+            isClimbingHold = false;
+        }
         boolean showPad = gameplayVisible && !virtualTouchHidden;
         if (touchpad != null) touchpad.setVisible(showPad);
         if (leftTable != null) leftTable.setVisible(showPad);
@@ -4191,13 +4496,13 @@ public class GameScreen implements Screen {
 
     private void updatePauseSelectionVisual() {
         if (btnPauseResume != null) {
-            btnPauseResume.setText(pauseMenuIndex == 0 ? "► CHƠI TIẾP (Enter) ◄" : "CHƠI TIẾP (1)");
+            btnPauseResume.setText(pauseMenuIndex == 0 ? "▸ CHƠI TIẾP (Enter) ‹" : "CHƠI TIẾP (1)");
         }
         if (btnPauseSettings != null) {
-            btnPauseSettings.setText(pauseMenuIndex == 1 ? "► CÀI ĐẶT & PHÍM (Enter) ◄" : "CÀI ĐẶT & PHÍM (2)");
+            btnPauseSettings.setText(pauseMenuIndex == 1 ? "▸ CÀI ĐẶT & PHÍM (Enter) ‹" : "CÀI ĐẶT & PHÍM (2)");
         }
         if (btnPauseExitBtn != null) {
-            btnPauseExitBtn.setText(pauseMenuIndex == 2 ? "► THOÁT RA MENU (Enter) ◄" : "THOÁT RA MENU (Q)");
+            btnPauseExitBtn.setText(pauseMenuIndex == 2 ? "▸ THOÁT RA MENU (Enter) ‹" : "THOÁT RA MENU (Q)");
         }
     }
 
@@ -4239,15 +4544,22 @@ public class GameScreen implements Screen {
     }
 
     private void togglePause() {
-        if (isMatchEnded || playerDead || storyDialogueActive) return;
+        boolean coopDowned = (currentGameMode == GameMode.COOP && playerDead && !coopWipeShown);
+        if (isMatchEnded || (playerDead && !coopDowned) || storyDialogueActive) return;
+        if (gameOverDialog != null && gameOverDialog.isVisible()) return;
         isPaused = !isPaused;
         if (isPaused) {
             closeChatOverlay();
+            closeShop();
             pauseMenuIndex = 0;
             updatePauseSelectionVisual();
         }
         if (modalOverlay != null) modalOverlay.setVisible(isPaused);
         if (pauseDialog != null) pauseDialog.setVisible(isPaused);
+        if (isOnlineMode()) {
+            if (btnChatToggle != null) btnChatToggle.setVisible(!isPaused);
+            if (btnMicToggle != null) btnMicToggle.setVisible(!isPaused);
+        }
         applyTouchHudVisibility(!isPaused);
         if (actionLog != null) {
             if (isPaused) actionLog.setText("ĐANG TẠM DỪNG (W/S chọn • Enter xác nhận • Esc tiếp tục)");
@@ -4271,6 +4583,9 @@ public class GameScreen implements Screen {
     private void setGameOverDialogVisible(boolean visible) {
         if (visible) {
             closeChatOverlay();
+            closeShop();
+            isPaused = false;
+            if (pauseDialog != null) pauseDialog.setVisible(false);
             if (isDesktopPlatform()) {
                 if (btnPlayAgain != null) {
                     String cur = btnPlayAgain.getText().toString();
@@ -4287,6 +4602,10 @@ public class GameScreen implements Screen {
         }
         if (modalOverlay != null) modalOverlay.setVisible(visible);
         if (gameOverDialog != null) gameOverDialog.setVisible(visible);
+        if (isOnlineMode()) {
+            if (btnChatToggle != null) btnChatToggle.setVisible(!visible);
+            if (btnMicToggle != null) btnMicToggle.setVisible(!visible);
+        }
 
         applyTouchHudVisibility(!visible);
 
@@ -4317,6 +4636,7 @@ public class GameScreen implements Screen {
             return;
         }
         closeChatOverlay();
+        closeShop();
         storyLines = lines;
         storyLineIndex = 0;
         storyLineTime = 0f;
@@ -4326,6 +4646,9 @@ public class GameScreen implements Screen {
         if (playerBody != null) playerBody.setLinearVelocity(0, playerBody.getLinearVelocity().y);
         applyTouchHudVisibility(false);
         if (btnTalkNPC != null) btnTalkNPC.setVisible(false);
+        if (btnEagleStrike != null) btnEagleStrike.setVisible(false);
+        if (btnShootCannon != null) btnShootCannon.setVisible(false);
+        if (btnAssassinate != null) btnAssassinate.setVisible(false);
         updateStoryFocus();
     }
 
@@ -4641,11 +4964,13 @@ public class GameScreen implements Screen {
         int boyBonus = (boyState == BoyState.RESCUED) ? 1000 : 0;
         int boyGold = (boyState == BoyState.RESCUED) ? 500 : 0;
         int totalScore = score + mobsKilledCount * 150 + timeBonus + boyBonus;
-        int totalGold = goldEarned + mobsKilledCount * 45 + boyGold + 1500;
-        goldEarned = totalGold; // thưởng hoàn thành ải được cộng vào vàng mang về
+        int bonusGold = mobsKilledCount * 45 + boyGold + 1500;
+        int totalGold = stageBankedGold + goldEarned + bonusGold;
+        goldEarned += bonusGold; // thưởng hoàn thành ải được cộng vào vàng mang về
+        grantMatchRewards();
         if (currentGameMode == GameMode.SOLO) {
             PlayerProfile.getInstance().onLevelCleared(currentLevel, totalScore);
-            if (!freePlay) StorySaveManager.advanceStage(currentLevel, selectedChar, playerHp, totalGold, totalScore, healthPotions);
+            if (!freePlay) StorySaveManager.advanceStage(currentLevel, selectedChar, playerHp, 0, totalScore, healthPotions);
         }
 
         if (story != null) {
@@ -4672,11 +4997,6 @@ public class GameScreen implements Screen {
     }
 
     private void showGameOverDialog(boolean isWinner) {
-        isMatchEnded = true;
-        try {
-            PlayerProfile.getInstance().recordMatchResult(isWinner);
-        } catch (Exception ignored) {}
-
         btnWaitRevive.setVisible(false);
 
         if (!isWinner && currentGameMode == GameMode.COOP) {
@@ -4689,9 +5009,15 @@ public class GameScreen implements Screen {
             return;
         }
 
+        isMatchEnded = true;
+        try {
+            PlayerProfile.getInstance().recordMatchResult(isWinner);
+        } catch (Exception ignored) {}
+
+        int matchGoldTotal = stageBankedGold + goldEarned;
         lblEndGameTitle.setText(isWinner ? "CHIẾN THẮNG!" : "BẠN ĐÃ BỊ HẠ GỤC!");
         lblEndGameTitle.setColor(isWinner ? Color.GOLD : Color.RED);
-        lblEndStats.setText("Tổng điểm: " + score + "  •  Vàng: " + goldEarned);
+        lblEndStats.setText("Tổng điểm: " + score + "  •  Vàng: " + matchGoldTotal);
 
         if (currentGameMode == GameMode.BATTLE_5V5) {
             lblEndGameTitle.setText(isWinner ? "CHIẾN THẮNG – PHE BẠN ĐÃ THẮNG!" : "THẤT BẠI – PHE BẠN ĐÃ THUA!");
@@ -4706,7 +5032,7 @@ public class GameScreen implements Screen {
             if (!isWinner) {
                 lblEndGameTitle.setText("BẠN ĐÃ GỤC NGÃ!");
                 lblEndStats.setText((story != null ? story.shortLabel() + " — " + story.stageTitle + "\n" : "")
-                    + "Điểm: " + score + "   •   Vàng: " + goldEarned + "\nMẹo: nấp trong bụi rậm để đánh lén, uống thuốc bằng phím H.");
+                    + "Điểm: " + score + "   •   Vàng: " + matchGoldTotal + "\nMẹo: nấp trong bụi rậm để đánh lén, uống thuốc bằng phím H.");
                 btnPlayAgain.setText("CHƠI LẠI ẢI NÀY");
             } else if (currentLevel < StoryChapterConfig.TOTAL_STAGES) {
                 btnPlayAgain.setText("TIẾP: " + StoryChapterConfig.get(currentLevel + 1).shortLabel().toUpperCase());
@@ -4717,22 +5043,39 @@ public class GameScreen implements Screen {
         setGameOverDialogVisible(true);
     }
 
+    /** Chuyển vàng chưa ngân hàng hóa sang hồ sơ (dùng trước khi lưu checkpoint/thoát ải để tránh nhân đôi). */
+    private void flushUnbankedSoloGold() {
+        if (currentGameMode != GameMode.SOLO || goldEarned <= 0) return;
+        try {
+            PlayerProfile.getInstance().addGold(goldEarned);
+            stageBankedGold += goldEarned;
+            goldEarned = 0;
+        } catch (Exception ignored) {}
+    }
+
     /** Cộng vàng mang về vào hồ sơ (chỉ 1 lần mỗi trận). */
     private void grantMatchRewards() {
         if (rewardsGranted) return;
         rewardsGranted = true;
         try {
-            if (goldEarned > 0) PlayerProfile.getInstance().addGold(goldEarned);
+            if (goldEarned > 0) {
+                PlayerProfile.getInstance().addGold(goldEarned);
+                stageBankedGold += goldEarned;
+                goldEarned = 0;
+            }
         } catch (Exception ignored) {}
     }
 
     private void showCoopWipe() {
         coopWipeShown = true;
         isMatchEnded = true;
+        try {
+            PlayerProfile.getInstance().recordMatchResult(false);
+        } catch (Exception ignored) {}
         btnWaitRevive.setVisible(false);
         lblEndGameTitle.setText("CẢ ĐỘI ĐÃ GỤC NGÃ!");
         lblEndGameTitle.setColor(Color.RED);
-        lblEndStats.setText("Hạ gục: " + mobsKilledCount + "  •  Điểm: " + score + "  •  Vàng: " + goldEarned);
+        lblEndStats.setText("Hạ gục: " + mobsKilledCount + "  •  Điểm: " + score + "  •  Vàng: " + (stageBankedGold + goldEarned));
         btnPlayAgain.setText("VỀ SẢNH HỢP TÁC");
         setGameOverDialogVisible(true);
         actionLog.setText("THẤT BẠI! KHÔNG CÒN AI ĐỂ HỒI SINH.");
@@ -4762,13 +5105,13 @@ public class GameScreen implements Screen {
 
     private void exitToMenu() {
         if (isDisposed) return;
+        grantMatchRewards();
         if (currentGameMode == GameMode.SOLO && story != null && !freePlay && !playerDead && !isMatchEnded) {
             float cpX = (activeCheckpointX > 1.0f) ? activeCheckpointX : (playerBody != null ? playerBody.getPosition().x : 10.0f);
             StorySaveManager.saveProgress(story.chapter, story.stage,
-                selectedChar, playerHp, goldEarned, score, healthPotions, cpX);
+                selectedChar, playerHp, 0, score, healthPotions, cpX);
         }
         cleanSocketListeners();
-        grantMatchRewards();
         NetworkManager nm = NetworkManager.getInstance();
         if (currentGameMode == GameMode.PVP || currentGameMode == GameMode.COOP || currentGameMode == GameMode.BATTLE_5V5) {
             nm.leaveRoom(); // rời phòng thật sự, không tự vào lại phòng cũ ở lần sau
@@ -4886,27 +5229,37 @@ public class GameScreen implements Screen {
     }
 
     private void revivePartner() {
+        if (currentGameMode != GameMode.COOP || partnerLeft || reviveCooldownTimer > 0f) return;
+        if (socket == null || !socket.connected()) {
+            actionLog.setText("MẤT KẾT NỐI MÁY CHỦ! KHÔNG THỂ HỒI SINH LÚC NÀY.");
+            return;
+        }
         if (goldEarned >= 50 && remoteHp <= 0) {
             goldEarned -= 50;
+            reviveCooldownTimer = 2.0f;
+            if (btnRevivePartner != null) btnRevivePartner.setVisible(false);
             updateScoreGoldUI();
             actionLog.setText("ĐÃ CỨU ĐỒNG ĐỘI (-50 VÀNG)!");
-            if (socket != null && socket.connected()) {
-                try {
-                    JSONObject packet = new JSONObject();
-                    packet.put("type", "revive");
-                    packet.put("damage", 0);
-                    packet.put("index", 0);
-                    socket.emit("playerAction", packet);
-                } catch (Exception ignored) {}
-            }
+            try {
+                JSONObject packet = new JSONObject();
+                packet.put("type", "revive");
+                packet.put("damage", 0);
+                packet.put("index", 0);
+                socket.emit("playerAction", packet);
+            } catch (Exception ignored) {}
         }
     }
 
     private void triggerAssassinate() {
-        if (isAssassinating || playerDead) return;
+        if (isAssassinating || playerDead || isMatchEnded || inCutscene() || isPaused
+            || playerStunTimer > 0f || isGrabbedByPirate || isEagleStriking) return;
 
         float targetX = 0f, targetY = 0f;
         boolean found = false;
+        pendingAssassinateMob = null;
+        pendingAssassinateFighter = null;
+        pendingAssassinateRemote = false;
+        pendingAssassinatePeerId = null;
 
         if (targetToAssassinate != null && !targetToAssassinate.isDead && targetToAssassinate.body != null) {
             pendingAssassinateMob = targetToAssassinate;
@@ -4923,6 +5276,14 @@ public class GameScreen implements Screen {
             targetX = remoteX;
             targetY = remoteY;
             found = true;
+        } else if (targetAssassinatePeerId != null) {
+            RemotePeer5v5 ep = findExtraPeer(targetAssassinatePeerId);
+            if (ep != null && !ep.dead && ep.x != -999f) {
+                pendingAssassinatePeerId = ep.id;
+                targetX = ep.x;
+                targetY = ep.y;
+                found = true;
+            }
         }
 
         if (!found) return;
@@ -4959,10 +5320,12 @@ public class GameScreen implements Screen {
         targetToAssassinate = null;
         targetFighterToAssassinate = null;
         targetRemoteToAssassinate = false;
+        targetAssassinatePeerId = null;
     }
 
     private void shootCannonAtImperial() {
-        if (!imperialAlive) return;
+        if (!imperialAlive || playerDead || isMatchEnded || inCutscene() || isPaused
+            || playerStunTimer > 0f || isGrabbedByPirate || isEagleStriking) return;
         Vector2 dir = new Vector2(imperialX - cannonPos.x, imperialY - cannonPos.y).nor();
         projectiles.add(new Projectile(cannonPos.x + 0.5f, cannonPos.y + 0.3f,
             dir.x * 16f, dir.y * 16f, 999, false, true, false, false));
@@ -4983,6 +5346,7 @@ public class GameScreen implements Screen {
                 break;
             }
         }
+        spawnX = snapToOpenGround(spawnX, 1.0f);
         boyFacing = 1;
         createBoyBody(spawnX, 1.2f);
 
@@ -5046,9 +5410,9 @@ public class GameScreen implements Screen {
                         break;
                     case ALERT:
                         pirateX += MathUtils.sin(stateTime * 1.5f) * 1.5f * delta;
-                        if (playerCovered) {
+                        if (playerDead || playerCovered) {
                             pirateState = PirateState.PATROL;
-                            actionLog.setText("Đã nấp dưới mái! Không Tặc bỏ qua.");
+                            if (!playerDead) actionLog.setText("Đã nấp dưới mái! Không Tặc bỏ qua.");
                         } else {
                             pirateAlertTimer -= delta;
                             actionLog.setText("KHÔNG TẶC PHÁT HIỆN! CÒN " +
@@ -5060,20 +5424,29 @@ public class GameScreen implements Screen {
                         }
                         break;
                     case DIVE:
+                        if (playerDead || playerCovered) {
+                            pirateState = PirateState.PATROL;
+                            break;
+                        }
                         Vector2 toPlayer = new Vector2(pPos.x - pirateX, pPos.y - pirateY);
                         float dist = toPlayer.len();
                         toPlayer.nor();
                         pirateX += toPlayer.x * 6.5f * delta;
                         pirateY += toPlayer.y * 6.5f * delta;
                         if (dist <= 0.85f) {
+                            resetTraversalState();
                             pirateState = PirateState.CARRY;
                             isGrabbedByPirate = true;
                             pirateCarryTimer = 1.0f;
                             actionLog.setText("BỊ TÓM! CÓ 1 GIÂY ĐỂ CHÉM TRẢ!");
                         }
-                        if (playerCovered) pirateState = PirateState.PATROL;
                         break;
                     case CARRY:
+                        if (playerDead) {
+                            isGrabbedByPirate = false;
+                            pirateState = PirateState.PATROL;
+                            break;
+                        }
                         pirateY += 3.2f * delta;
                         playerBody.setTransform(pirateX, pirateY - 0.6f, 0);
                         playerBody.setLinearVelocity(0, 0);
@@ -5220,15 +5593,8 @@ public class GameScreen implements Screen {
                     m.poisonTickAccum -= 0.5f;
                     Vector2 mp = m.body.getPosition();
                     spawnHitSparks(mp.x, mp.y + 0.35f, 5, Color.PURPLE);
-                    addDamageText(mp.x, mp.y + 0.45f, 18, Color.PURPLE);
-                    if (m.hp <= 18) {
-                        damageGroundMob(m, 20, true);
-                        continue;
-                    } else {
-                        m.hp -= 18;
-                        enemyHpBar.setMaxHp(m.maxHp);
-                        enemyHpBar.setHp(m.hp);
-                    }
+                    damageGroundMob(m, 18, true, true);
+                    if (m.isDead) continue;
                 }
             }
 
@@ -5253,8 +5619,9 @@ public class GameScreen implements Screen {
             m.animTime += delta;
             if (m.atkCooldown > 0) m.atkCooldown -= delta;
 
-            // Monster attacks boy
-            if (boyState != BoyState.INACTIVE && boyState != BoyState.DEAD && boyBody != null) {
+            // Monster attacks boy (chỉ khi Tiểu Vũ đã được giải cứu & quái đang giao chiến — tránh lính gác giết cậu bé đứng yên!)
+            if (boyState == BoyState.RESCUED && boyBody != null
+                && ("CHASE".equals(m.state) || "ATTACK".equals(m.state))) {
                 float distToBoy = Math.abs(boyBody.getPosition().x - mPos.x);
                 if (distToBoy < 1.15f && Math.abs(boyBody.getPosition().y - mPos.y) < 1.1f && m.atkCooldown <= 0) {
                     boyHp = Math.max(0, boyHp - 15);
@@ -5345,7 +5712,7 @@ public class GameScreen implements Screen {
                     cameraShakeIntensity = 0.45f;
                     SoundManager.getInstance().playBossSmash();
                     spawnHitSparks(mPos.x, mPos.y - 0.5f, 25, new Color(1f, 0.5f, 0.1f, 1f));
-                    if (absDist <= 6.8f) {
+                    if (absDist <= 6.8f && Math.abs(pPos.y - mPos.y) <= 1.8f) {
                         if (isGrounded && !playerDead) {
                             int smashDmg = absorbShield(m.isBerserk ? 65 : 45);
                             playerHp = Math.max(0, playerHp - smashDmg);
@@ -5407,13 +5774,15 @@ public class GameScreen implements Screen {
             }
 
             if ("ATTACK".equals(m.state)) {
-                m.body.setLinearVelocity(m.body.getLinearVelocity().x * 0.86f, m.body.getLinearVelocity().y);
+                float damp = (float) Math.pow(0.86, delta * 60.0);
+                m.body.setLinearVelocity(m.body.getLinearVelocity().x * damp, m.body.getLinearVelocity().y);
                 float triggerTime = (m.isBoss && m.isBerserk) ? 0.22f : 0.30f;
                 if (!m.hitThisAtk && m.animTime >= triggerTime) {
                     float hitRange = m.isBoss ? (m.isBerserk ? 1.85f : 1.6f) : 1.35f;
                     int baseDmg = m.isBoss ? (currentGameMode == GameMode.COOP ? 50 : 35) : (currentGameMode == GameMode.COOP ? 25 : 15);
                     int dmg = (m.isBoss && m.isBerserk) ? (int)(baseDmg * 1.70f) : baseDmg;
-                    if (absDist <= hitRange && Math.abs(pPos.y - mPos.y) < 1.35f && !playerDead) {
+                    boolean mobFacingTarget = (m.facing == 1 && distToPlayer >= -0.2f) || (m.facing == -1 && distToPlayer <= 0.2f);
+                    if (mobFacingTarget && absDist <= hitRange && Math.abs(pPos.y - mPos.y) < 1.35f && !playerDead) {
                         boolean isFacingEnemy = (playerFacing == 1 && distToPlayer < 0) || (playerFacing == -1 && distToPlayer > 0);
                         if (isCrouching && isFacingEnemy) {
                             m.state = "HIT";
@@ -5722,21 +6091,30 @@ public class GameScreen implements Screen {
     }
 
     private void damageGroundMob(GroundMob m, int damage, boolean shouldSync) {
-        if (m == null || m.isDead || m.body == null) return;
+        damageGroundMob(m, damage, shouldSync, false);
+    }
+
+    private void damageGroundMob(GroundMob m, int damage, boolean shouldSync, boolean fromPoison) {
+        if (m == null || m.isDead || m.body == null || damage <= 0) return;
 
         // Trong lúc Boss gồng 2s Cuồng Huyết: giảm mạnh 85% sát thương gánh chịu!
         if (m.isChargingBerserk) {
             damage = Math.max(1, (int)(damage * 0.15f));
-            addCustomText(m.body.getPosition().x, m.body.getPosition().y + 0.8f, "GIẢM 85% SÁT THƯƠNG!", Color.CYAN);
+            if (!fromPoison) {
+                addCustomText(m.body.getPosition().x, m.body.getPosition().y + 0.8f, "GIẢM 85% SÁT THƯƠNG!", Color.CYAN);
+            }
         }
 
+        int prevHp = m.hp;
         m.hp = Math.max(0, m.hp - damage);
+        int effectiveDmg = Math.min(prevHp, damage);
 
         // Kích hoạt trạng thái GỒNG CUỒNG HUYẾT trong 2s khi tụt xuống <= 50% HP
         if (m.isBoss && !m.berserkTriggered && m.hp <= (m.maxHp * 0.50f) && m.hp > 0) {
             m.berserkTriggered = true;
             m.isChargingBerserk = true;
             m.berserkChargeTimer = 2.0f;
+            m.hitTimer = 0f;
             m.state = "BERSERK_CHARGE";
             m.animTime = 0f;
             m.body.setLinearVelocity(0, m.body.getLinearVelocity().y);
@@ -5750,22 +6128,26 @@ public class GameScreen implements Screen {
         enemyHpBar.setMaxHp(m.maxHp);
         enemyHpBar.setHp(m.hp);
         lblEnemyInfo.setText((m.isBoss ? (story != null ? story.bossName + ": " : "THỦ LĨNH: ") : "Lính: ") + m.hp + " HP");
-        addDamageText(m.body.getPosition().x, m.body.getPosition().y + 0.4f, damage, Color.YELLOW);
-        spawnHitSparks(m.body.getPosition().x, m.body.getPosition().y + 0.4f, m.isBoss ? 16 : 8, m.isBoss ? Color.ORANGE : Color.YELLOW);
+        addDamageText(m.body.getPosition().x, m.body.getPosition().y + 0.4f, damage, fromPoison ? Color.PURPLE : Color.YELLOW);
 
-        if (m.isBoss || damage >= 80) {
-            SoundManager.getInstance().playHeavyHit();
-            hitStopTimer = 0.08f;
-            cameraShakeTime = 0.35f;
-            cameraShakeIntensity = 0.30f;
-        } else {
-            SoundManager.getInstance().playHit();
-            hitStopTimer = 0.04f;
+        if (!fromPoison) {
+            spawnHitSparks(m.body.getPosition().x, m.body.getPosition().y + 0.4f, m.isBoss ? 16 : 8, m.isBoss ? Color.ORANGE : Color.YELLOW);
+            if (m.isBoss || damage >= 80) {
+                SoundManager.getInstance().playHeavyHit();
+                hitStopTimer = 0.08f;
+                cameraShakeTime = 0.35f;
+                cameraShakeIntensity = 0.30f;
+            } else {
+                SoundManager.getInstance().playHit();
+                hitStopTimer = 0.04f;
+            }
         }
 
-        score += damage * 2;
-        goldEarned += (int)(damage * 0.4f);
-        updateScoreGoldUI();
+        if (damage < 9000) {
+            score += effectiveDmg * 2;
+            goldEarned += (int)(effectiveDmg * 0.4f);
+            updateScoreGoldUI();
+        }
 
         if (shouldSync && currentGameMode == GameMode.COOP && m.id >= 0) {
             sendActionPacket("mobHit", damage, m.id);
@@ -5792,11 +6174,14 @@ public class GameScreen implements Screen {
                     flist.get(fi).setSensor(true);
                 }
             }
-        } else {
-            m.hitTimer = 0.24f;
-            m.state = "HIT";
+        } else if (!fromPoison) {
+            boolean bossImmuneHitstun = m.isBoss && (m.isChargingBerserk || "SMASH_WINDUP".equals(m.state) || m.isResting || m.isBerserk);
+            if (!bossImmuneHitstun) {
+                m.hitTimer = 0.24f;
+                m.state = "HIT";
+            }
             m.alertTimer = 6.5f;
-            if (playerBody != null) {
+            if (playerBody != null && !m.isChargingBerserk && !m.isResting) {
                 float dx = playerBody.getPosition().x - m.body.getPosition().x;
                 if (Math.abs(dx) > 0.1f) m.facing = (dx > 0) ? 1 : -1;
             }
@@ -5936,7 +6321,8 @@ public class GameScreen implements Screen {
     }
 
     private void triggerUltimate() {
-        if (playerDead || isAssassinating || isMatchEnded || playerStunTimer > 0 || isGrabbedByPirate || playerBody == null) return;
+        if (playerDead || isAssassinating || isMatchEnded || isPaused || inCutscene()
+            || playerStunTimer > 0 || isGrabbedByPirate || playerBody == null) return;
 
         if (isSwinging) {
             if (currentSwingingRope != null) {
@@ -5946,7 +6332,9 @@ public class GameScreen implements Screen {
             isSwinging = false;
         }
 
-        boolean isP1 = !"P2".equals(selectedChar);
+        String activeUlt = (currentGameMode == GameMode.BATTLE_5V5 && playerCurrentUltType != null)
+            ? playerCurrentUltType : selectedChar;
+        boolean isP1 = !"P2".equals(activeUlt);
         Vector2 pPos = playerBody.getPosition();
 
         if (isP1) {
@@ -6095,10 +6483,11 @@ public class GameScreen implements Screen {
                 playerBody.setLinearVelocity(0, 0.2f);
                 spawnHitSparks(pos.x, pos.y, 5, Color.GOLD);
             } else {
+                float prevVy = playerBody.getLinearVelocity().y;
                 playerBody.setLinearVelocity(0, -24.0f);
                 spawnHitSparks(pos.x, pos.y, 4, Color.ORANGE);
 
-                if (isGrounded || pos.y <= 1.25f || playerBody.getLinearVelocity().y >= -0.5f) {
+                if (isGrounded || pos.y <= 1.25f || (p1UltTimer > 0.80f && prevVy >= -0.5f) || p1UltTimer > 2.2f) {
                     isP1UltActive = false;
                     cameraShakeTime = 0.70f;
                     cameraShakeIntensity = 0.55f;
@@ -6109,14 +6498,24 @@ public class GameScreen implements Screen {
                     int p1UltDmg = (currentGameMode == GameMode.PVP) ? 200 : 320;
                     if (currentGameMode == GameMode.PVP) {
                         float dist = Math.abs(remoteX - pos.x);
-                        if (dist <= 3.5f && Math.abs(remoteY - pos.y) < 2.0f) {
+                        if (!remoteDead && remoteX != -999f && dist <= 3.5f && Math.abs(remoteY - pos.y) < 2.0f) {
                             sendActionPacket("hit", p1UltDmg, 0);
                         }
                     } else if (currentGameMode == GameMode.BATTLE_5V5) {
                         int pTeam = (game != null) ? game.selectedTeam : 1;
-                        int p1UltDmg5v5 = (int)(320 * playerDamageBuff);
-                        if (remoteX != -999f && !remoteDead && pos.dst(remoteX, remoteY) <= 4.2f) {
+                        int p1UltDmg5v5 = (int)(320 * playerDamageBuff * (playerHasTitanBuff ? 1.35f : 1f));
+                        if (remoteX != -999f && !remoteDead && remoteTeam != pTeam && pos.dst(remoteX, remoteY) <= 4.2f) {
                             sendActionPacket("hit", p1UltDmg5v5, 0);
+                            remoteHitFlashTimer = 0.25f;
+                            addDamageText(remoteX, remoteY + 0.5f, p1UltDmg5v5, Color.GOLD);
+                        }
+                        for (int epi = 0; epi < extraPeers5v5.size; epi++) {
+                            RemotePeer5v5 ep = extraPeers5v5.get(epi);
+                            if (ep.team != pTeam && !ep.dead && ep.x != -999f && pos.dst(ep.x, ep.y) <= 4.2f) {
+                                sendActionPacketToPeer("hit", p1UltDmg5v5, 0, ep.id);
+                                ep.hitFlashTimer = 0.25f;
+                                addDamageText(ep.x, ep.y + 0.5f, p1UltDmg5v5, Color.GOLD);
+                            }
                         }
                         for (int i = 0; i < fighters5v5.size; i++) {
                             Fighter5v5 f = fighters5v5.get(i);
@@ -6152,23 +6551,55 @@ public class GameScreen implements Screen {
             p2StealthTimer -= delta;
             Vector2 pPos = playerBody.getPosition();
             p2TargetInRange = false;
+            p2TargetIsPrimaryRemote = false;
+            p2TargetPeerId = null;
 
             if (currentGameMode == GameMode.PVP) {
-                if (!remoteDead && pPos.dst(remoteX, remoteY) <= P2_STEALTH_RANGE) {
+                if (remoteX != -999f && !remoteDead && !remoteStealth && pPos.dst(remoteX, remoteY) <= P2_STEALTH_RANGE) {
                     p2TargetInRange = true;
+                    p2TargetIsPrimaryRemote = true;
                     p2TargetPos.set(remoteX, remoteY);
                     p2TargetFacing = remoteFacing;
                 }
             } else if (currentGameMode == GameMode.BATTLE_5V5) {
                 int pTeam = (game != null) ? game.selectedTeam : 1;
                 float closestDst = 999f;
+                if (remoteX != -999f && !remoteDead && remoteTeam != pTeam && !remoteStealth
+                    && isRemoteVisibleIn5v5(remoteX, remoteY, remoteTeam, remoteInBush)) {
+                    float d = pPos.dst(remoteX, remoteY);
+                    if (d <= P2_STEALTH_RANGE && d < closestDst) {
+                        closestDst = d;
+                        p2TargetInRange = true;
+                        p2TargetIsPrimaryRemote = true;
+                        p2TargetPeerId = null;
+                        p2TargetPos.set(remoteX, remoteY);
+                        p2TargetFacing = remoteFacing;
+                    }
+                }
+                for (int epi = 0; epi < extraPeers5v5.size; epi++) {
+                    RemotePeer5v5 ep = extraPeers5v5.get(epi);
+                    if (ep.team != pTeam && !ep.dead && ep.x != -999f && !ep.stealth
+                        && isRemoteVisibleIn5v5(ep.x, ep.y, ep.team, ep.inBush)) {
+                        float d = pPos.dst(ep.x, ep.y);
+                        if (d <= P2_STEALTH_RANGE && d < closestDst) {
+                            closestDst = d;
+                            p2TargetInRange = true;
+                            p2TargetIsPrimaryRemote = false;
+                            p2TargetPeerId = ep.id;
+                            p2TargetPos.set(ep.x, ep.y);
+                            p2TargetFacing = ep.facing;
+                        }
+                    }
+                }
                 for (int i = 0; i < fighters5v5.size; i++) {
                     Fighter5v5 f = fighters5v5.get(i);
-                    if (f.team != pTeam && !f.isDead && f.body != null) {
+                    if (f.team != pTeam && !f.isDead && f.body != null && !f.isStealth && !(f.isInBush && !playerInBush)) {
                         float d = pPos.dst(f.body.getPosition());
                         if (d <= P2_STEALTH_RANGE && d < closestDst) {
                             closestDst = d;
                             p2TargetInRange = true;
+                            p2TargetIsPrimaryRemote = false;
+                            p2TargetPeerId = null;
                             p2TargetPos.set(f.body.getPosition().x, f.body.getPosition().y);
                             p2TargetFacing = f.facing;
                         }
@@ -6240,14 +6671,24 @@ public class GameScreen implements Screen {
                 spawnHitSparks(p2BehindTargetPos.x + playerFacing * 0.4f, p2BehindTargetPos.y, 25, Color.GOLD);
 
                 if (currentGameMode == GameMode.PVP) {
-                    if (!remoteDead && p2BehindTargetPos.dst(remoteX, remoteY) <= 2.2f) {
+                    if (remoteX != -999f && !remoteDead && p2BehindTargetPos.dst(remoteX, remoteY) <= 2.2f) {
                         sendActionPacket("hit", p2UltDmg, 0);
                     }
                 } else if (currentGameMode == GameMode.BATTLE_5V5) {
                     int pTeam = (game != null) ? game.selectedTeam : 1;
-                    int p2UltDmg5v5 = (int)(380 * playerDamageBuff);
-                    if (remoteX != -999f && !remoteDead && p2BehindTargetPos.dst(remoteX, remoteY) <= 2.5f) {
+                    int p2UltDmg5v5 = (int)(380 * playerDamageBuff * (playerHasTitanBuff ? 1.35f : 1f));
+                    if (remoteX != -999f && !remoteDead && remoteTeam != pTeam && p2BehindTargetPos.dst(remoteX, remoteY) <= 2.5f) {
                         sendActionPacket("hit", p2UltDmg5v5, 0);
+                        remoteHitFlashTimer = 0.25f;
+                        addDamageText(remoteX, remoteY + 0.5f, p2UltDmg5v5, Color.PURPLE);
+                    }
+                    for (int epi = 0; epi < extraPeers5v5.size; epi++) {
+                        RemotePeer5v5 ep = extraPeers5v5.get(epi);
+                        if (ep.team != pTeam && !ep.dead && ep.x != -999f && p2BehindTargetPos.dst(ep.x, ep.y) <= 2.5f) {
+                            sendActionPacketToPeer("hit", p2UltDmg5v5, 0, ep.id);
+                            ep.hitFlashTimer = 0.25f;
+                            addDamageText(ep.x, ep.y + 0.5f, p2UltDmg5v5, Color.PURPLE);
+                        }
                     }
                     for (int i = 0; i < fighters5v5.size; i++) {
                         Fighter5v5 f = fighters5v5.get(i);
@@ -6289,7 +6730,9 @@ public class GameScreen implements Screen {
 
         // Cap nhat trang thai hien thi cua nut btnUltimate (ASCII an toan)
         if (btnUltimate != null) {
-            boolean isP1 = !"P2".equals(selectedChar);
+            String activeUlt = (currentGameMode == GameMode.BATTLE_5V5 && playerCurrentUltType != null)
+                ? playerCurrentUltType : selectedChar;
+            boolean isP1 = !"P2".equals(activeUlt);
             int stealthSecs = isP2StealthActive ? Math.max(0, Math.round(p2StealthTimer)) : 0;
             int key = (isP1 ? 1 : 0) | (Math.min(ultimateKills, 15) << 1) | ((isP2StealthActive ? 1 : 0) << 5)
                 | ((p2TargetInRange ? 1 : 0) << 6) | (stealthSecs << 7);
@@ -6354,7 +6797,7 @@ public class GameScreen implements Screen {
     }
 
     private void useHealthPotion() {
-        if (playerDead || isMatchEnded || storyDialogueActive) return;
+        if (currentGameMode == GameMode.PVP || playerDead || isMatchEnded || storyDialogueActive || isPaused) return;
         if (healthPotions > 0) {
             if (playerHp >= playerMaxHp) {
                 actionLog.setText("MÁU ĐÃ ĐẦY, CHƯA CẦN UỐNG THUỐC!");
@@ -6375,8 +6818,13 @@ public class GameScreen implements Screen {
         }
     }
 
+    private void closeShop() {
+        isShopOpen = false;
+        if (shopDialogTable != null) shopDialogTable.setVisible(false);
+    }
+
     private void toggleShop() {
-        if (playerDead || isMatchEnded || storyDialogueActive || isPaused) return;
+        if (currentGameMode == GameMode.PVP || playerDead || isMatchEnded || storyDialogueActive || isPaused) return;
         isShopOpen = !isShopOpen;
         if (shopDialogTable != null) shopDialogTable.setVisible(isShopOpen);
         if (isShopOpen) {
@@ -6389,6 +6837,7 @@ public class GameScreen implements Screen {
     }
 
     private void buySwordUpgrade() {
+        if (!isShopOpen || playerDead || isMatchEnded || isPaused || storyDialogueActive) return;
         if (spendGold(100)) {
             swordDamageBonus += 15;
             updateScoreGoldUI();
@@ -6401,6 +6850,7 @@ public class GameScreen implements Screen {
     }
 
     private void buyArmorUpgrade() {
+        if (!isShopOpen || playerDead || isMatchEnded || isPaused || storyDialogueActive) return;
         if (spendGold(120)) {
             playerMaxHp += 25;
             playerHp = Math.min(playerMaxHp, playerHp + 25);
@@ -6417,6 +6867,7 @@ public class GameScreen implements Screen {
     }
 
     private void buyHealthPotion() {
+        if (!isShopOpen || playerDead || isMatchEnded || isPaused || storyDialogueActive) return;
         if (spendGold(40)) {
             healthPotions++;
             updateScoreGoldUI();
@@ -6461,7 +6912,9 @@ public class GameScreen implements Screen {
 
         btnCloseShop.addListener(new ClickListener() {
             @Override public void clicked(InputEvent event, float x, float y) {
-                toggleShop();
+                closeShop();
+                SoundManager.getInstance().playSlash();
+                actionLog.setText("ĐÃ ĐÓNG TIỆM ĐỒ. TIẾP TỤC CHIẾN ĐẤU!");
             }
         });
 
@@ -6477,6 +6930,10 @@ public class GameScreen implements Screen {
 
     private void triggerJump(boolean kLeft, boolean kRight) {
         if (playerDead || isAssassinating || isEagleStriking || isMatchEnded || isGrabbedByPirate || playerStunTimer > 0 || inCutscene()) return;
+        if (isLedgeGrabbing) {
+            performLedgeMantle();
+            return;
+        }
         if (isCrouching) {
             if (!canStandUp()) {
                 actionLog.setText("Trần quá thấp! Cần bò ra khỏi đường hầm trước.");
@@ -6576,6 +7033,10 @@ public class GameScreen implements Screen {
     }
 
     private void triggerAttack() {
+        triggerAttack(true);
+    }
+
+    private void triggerAttack(boolean allowMouseFacing) {
         if (playerDead || isAssassinating || isDashing || isClimbing || isSwinging || isEagleStriking
             || isMatchEnded || playerStunTimer > 0 || inCutscene()) return;
         if (isCrouching) {
@@ -6587,12 +7048,12 @@ public class GameScreen implements Screen {
         SoundManager.getInstance().playSlash();
 
         // Turn character facing direction to match attack input / mouse click / movement
-        boolean kLeft = Gdx.input.isKeyPressed(Input.Keys.A) || Gdx.input.isKeyPressed(Input.Keys.LEFT);
-        boolean kRight = Gdx.input.isKeyPressed(Input.Keys.D) || Gdx.input.isKeyPressed(Input.Keys.RIGHT);
-        boolean isDesktop = (Gdx.app.getType() == Application.ApplicationType.Desktop || Gdx.app.getType() == Application.ApplicationType.WebGL);
-        if (moveLeft || kLeft) playerFacing = -1;
-        else if (moveRight || kRight) playerFacing = 1;
-        else if (isDesktop && (Gdx.input.isButtonJustPressed(Input.Buttons.LEFT) || Gdx.input.isButtonJustPressed(Input.Buttons.RIGHT))) {
+        boolean kLeft = !isChatTyping() && (Gdx.input.isKeyPressed(Input.Keys.A) || Gdx.input.isKeyPressed(Input.Keys.LEFT));
+        boolean kRight = !isChatTyping() && (Gdx.input.isKeyPressed(Input.Keys.D) || Gdx.input.isKeyPressed(Input.Keys.RIGHT));
+        float knobX = (touchpad != null && touchpad.isVisible()) ? touchpad.getKnobPercentX() : 0f;
+        if (moveLeft || kLeft || knobX < -0.25f) playerFacing = -1;
+        else if (moveRight || kRight || knobX > 0.25f) playerFacing = 1;
+        else if (allowMouseFacing && isDesktopPlatform() && Gdx.input.isButtonJustPressed(Input.Buttons.LEFT)) {
             Vector3 mouseWorldPos = viewport.unproject(tmpVec3.set(Gdx.input.getX(), Gdx.input.getY(), 0));
             float dx = mouseWorldPos.x - playerBody.getPosition().x;
             if (Math.abs(dx) > 0.2f) playerFacing = (dx > 0) ? 1 : -1;
@@ -6613,7 +7074,8 @@ public class GameScreen implements Screen {
 
         // Anti-air attack against sky pirate
         if (isAimingUp && pirateAlive) {
-            if (Math.abs(pPos.x - pirateX) < 2.0f && (pirateY - pPos.y) < 2.8f) {
+            float dyP = pirateY - pPos.y;
+            if (Math.abs(pPos.x - pirateX) < 2.0f && dyP >= -0.4f && dyP < 2.8f) {
                 damagePirate(50 + swordDamageBonus);
                 attackCombo = 1;
                 attackTime = 0f;
@@ -6646,6 +7108,7 @@ public class GameScreen implements Screen {
                     arrow.targetFighter = bowLockFighter;
                     arrow.targetTurret = bowLockTurret;
                     arrow.targetSpecial = bowLockSpecial;
+                    arrow.targetPeerId = bowLockPeerId;
                     projectiles.add(arrow);
                     spawnHitSparks(arrowSpawnX + playerFacing * 0.20f, arrowSpawnY, 10, Color.GREEN);
                     actionLog.setText("CUNG TÊN TRUY HỒN: ĐÃ KHÓA MỤC TIÊU! (-" + bowDmg + " HP)");
@@ -6698,41 +7161,66 @@ public class GameScreen implements Screen {
                 SoundManager.getInstance().playHeavyHit();
                 addCustomText(pPos.x + playerFacing * 0.85f, pPos.y + 0.6f, "ĐẠI TRẢM RÌU CHIẾN!", Color.ORANGE);
                 if (currentGameMode == GameMode.PVP) {
-                    if (Math.abs(remoteX - pPos.x) <= 2.0f && Math.abs(remoteY - pPos.y) < 1.5f)
+                    float dxR = remoteX - pPos.x;
+                    boolean facingR = (playerFacing == 1 && dxR >= -0.25f) || (playerFacing == -1 && dxR <= 0.25f);
+                    if (!remoteDead && remoteX != -999f && facingR && Math.abs(dxR) <= 2.0f && Math.abs(remoteY - pPos.y) < 1.5f)
                         sendActionPacket("hit", axeDmg, 0);
                 } else if (currentGameMode == GameMode.BATTLE_5V5) {
                     int pTeam = (game != null) ? game.selectedTeam : 1;
-                    int finalDmg = (int)(axeDmg * playerDamageBuff);
-                    if (remoteX != -999f && !remoteDead && remoteTeam != pTeam
-                        && Math.abs(remoteX - pPos.x) <= 2.0f && Math.abs(remoteY - pPos.y) < 1.5f) {
-                        sendActionPacket("hit", finalDmg, 0);
-                        remoteHitFlashTimer = 0.20f;
-                        addDamageText(remoteX, remoteY + 0.5f, finalDmg, Color.ORANGE);
+                    float titanMult = playerHasTitanBuff ? 1.35f : 1.0f;
+                    float ambushMult = playerAmbushBuff ? 1.40f : 1.0f;
+                    int finalDmg = (int)(axeDmg * playerDamageBuff * titanMult * ambushMult);
+                    boolean hitAny = false;
+                    if (remoteX != -999f && !remoteDead && remoteTeam != pTeam) {
+                        float dxR = remoteX - pPos.x;
+                        boolean facingR = (playerFacing == 1 && dxR >= -0.25f) || (playerFacing == -1 && dxR <= 0.25f);
+                        if (facingR && Math.abs(dxR) <= 2.0f && Math.abs(remoteY - pPos.y) < 1.5f) {
+                            sendActionPacket("hit", finalDmg, 0);
+                            remoteHitFlashTimer = 0.20f;
+                            addDamageText(remoteX, remoteY + 0.5f, finalDmg, Color.ORANGE);
+                            hitAny = true;
+                        }
                     }
                     for (int epi = 0; epi < extraPeers5v5.size; epi++) {
                         RemotePeer5v5 ep = extraPeers5v5.get(epi);
-                        if (ep.team != pTeam && !ep.dead && ep.x != -999f
-                            && Math.abs(ep.x - pPos.x) <= 2.0f && Math.abs(ep.y - pPos.y) < 1.5f) {
-                            sendActionPacketToPeer("hit", finalDmg, 0, ep.id);
-                            ep.hitFlashTimer = 0.20f;
-                            addDamageText(ep.x, ep.y + 0.5f, finalDmg, Color.ORANGE);
+                        if (ep.team != pTeam && !ep.dead && ep.x != -999f) {
+                            float dxEp = ep.x - pPos.x;
+                            boolean facingEp = (playerFacing == 1 && dxEp >= -0.25f) || (playerFacing == -1 && dxEp <= 0.25f);
+                            if (facingEp && Math.abs(dxEp) <= 2.0f && Math.abs(ep.y - pPos.y) < 1.5f) {
+                                sendActionPacketToPeer("hit", finalDmg, 0, ep.id);
+                                ep.hitFlashTimer = 0.20f;
+                                addDamageText(ep.x, ep.y + 0.5f, finalDmg, Color.ORANGE);
+                                hitAny = true;
+                            }
                         }
                     }
                     for (int i = 0; i < fighters5v5.size; i++) {
                         Fighter5v5 f = fighters5v5.get(i);
-                        if (f.team != pTeam && !f.isDead && f.body != null && Math.abs(f.body.getPosition().x - pPos.x) <= 2.0f && Math.abs(f.body.getPosition().y - pPos.y) < 1.5f) {
-                            boolean killed = f.takeDamage(finalDmg);
-                            spawnHitSparks(f.body.getPosition().x, f.body.getPosition().y + 0.3f, 20, Color.ORANGE);
-                            addDamageText(f.body.getPosition().x, f.body.getPosition().y + 0.5f, finalDmg, Color.ORANGE);
-                            if (killed) on5v5Kill((game != null && game.playerName != null ? game.playerName : "Chiến Thần"), pTeam, f.name, f.team);
+                        if (f.team != pTeam && !f.isDead && f.body != null) {
+                            float dxF = f.body.getPosition().x - pPos.x;
+                            boolean facingF = (playerFacing == 1 && dxF >= -0.25f) || (playerFacing == -1 && dxF <= 0.25f);
+                            if (facingF && Math.abs(dxF) <= 2.0f && Math.abs(f.body.getPosition().y - pPos.y) < 1.5f) {
+                                boolean killed = f.takeDamage(finalDmg);
+                                spawnHitSparks(f.body.getPosition().x, f.body.getPosition().y + 0.3f, 20, Color.ORANGE);
+                                addDamageText(f.body.getPosition().x, f.body.getPosition().y + 0.5f, finalDmg, Color.ORANGE);
+                                if (killed) on5v5Kill((game != null && game.playerName != null ? game.playerName : "Chiến Thần"), pTeam, f.name, f.team);
+                                hitAny = true;
+                            }
                         }
+                    }
+                    if (hitAny && playerAmbushBuff) {
+                        playerAmbushBuff = false;
+                        addCustomText(pPos.x, pPos.y + 0.8f, "PHỤC KÍCH! +40%", Color.GOLD);
                     }
                 } else {
                     for (int i = activeMonsters.size - 1; i >= 0; i--) {
                         GroundMob m = activeMonsters.get(i);
-                        if (m.body != null && Math.abs(m.body.getPosition().x - pPos.x) <= 2.0f
-                            && Math.abs(m.body.getPosition().y - pPos.y) < 1.5f)
-                            damageGroundMob(m, axeDmg, true);
+                        if (m.body != null && !m.isDead) {
+                            float dxM = m.body.getPosition().x - pPos.x;
+                            boolean facingM = (playerFacing == 1 && dxM >= -0.25f) || (playerFacing == -1 && dxM <= 0.25f);
+                            if (facingM && Math.abs(dxM) <= 2.0f && Math.abs(m.body.getPosition().y - pPos.y) < 1.5f)
+                                damageGroundMob(m, axeDmg, true);
+                        }
                     }
                     if (hasSkyPirate && pirateAlive && Math.abs(pirateX - pPos.x) <= 2.2f && Math.abs(pirateY - pPos.y) < 1.6f) {
                         damagePirate(axeDmg);
@@ -6823,41 +7311,66 @@ public class GameScreen implements Screen {
         actionLog.setText(daggerComboStep == 1 ? "SONG ĐAO: TẢ TRẢM!" : "SONG ĐAO: HỮU PHẠT!");
 
         if (currentGameMode == GameMode.PVP) {
-            if (Math.abs(remoteX - pPos.x) <= 1.75f && Math.abs(remoteY - pPos.y) < 1.35f)
+            float dxR = remoteX - pPos.x;
+            boolean facingR = (playerFacing == 1 && dxR >= -0.25f) || (playerFacing == -1 && dxR <= 0.25f);
+            if (!remoteDead && remoteX != -999f && facingR && Math.abs(dxR) <= 1.75f && Math.abs(remoteY - pPos.y) < 1.35f)
                 sendActionPacket("hit", daggerDmg, 0);
         } else if (currentGameMode == GameMode.BATTLE_5V5) {
             int pTeam = (game != null) ? game.selectedTeam : 1;
-            int finalDmg = (int)(daggerDmg * playerDamageBuff);
-            if (remoteX != -999f && !remoteDead && remoteTeam != pTeam
-                && Math.abs(remoteX - pPos.x) <= 1.75f && Math.abs(remoteY - pPos.y) < 1.35f) {
-                sendActionPacket("hit", finalDmg, 0);
-                remoteHitFlashTimer = 0.20f;
-                addDamageText(remoteX, remoteY + 0.5f, finalDmg, Color.RED);
+            float titanMult = playerHasTitanBuff ? 1.35f : 1.0f;
+            float ambushMult = playerAmbushBuff ? 1.40f : 1.0f;
+            int finalDmg = (int)(daggerDmg * playerDamageBuff * titanMult * ambushMult);
+            boolean hitAny = false;
+            if (remoteX != -999f && !remoteDead && remoteTeam != pTeam) {
+                float dxR = remoteX - pPos.x;
+                boolean facingR = (playerFacing == 1 && dxR >= -0.25f) || (playerFacing == -1 && dxR <= 0.25f);
+                if (facingR && Math.abs(dxR) <= 1.75f && Math.abs(remoteY - pPos.y) < 1.35f) {
+                    sendActionPacket("hit", finalDmg, 0);
+                    remoteHitFlashTimer = 0.20f;
+                    addDamageText(remoteX, remoteY + 0.5f, finalDmg, Color.RED);
+                    hitAny = true;
+                }
             }
             for (int epi = 0; epi < extraPeers5v5.size; epi++) {
                 RemotePeer5v5 ep = extraPeers5v5.get(epi);
-                if (ep.team != pTeam && !ep.dead && ep.x != -999f
-                    && Math.abs(ep.x - pPos.x) <= 1.75f && Math.abs(ep.y - pPos.y) < 1.35f) {
-                    sendActionPacketToPeer("hit", finalDmg, 0, ep.id);
-                    ep.hitFlashTimer = 0.20f;
-                    addDamageText(ep.x, ep.y + 0.5f, finalDmg, Color.RED);
+                if (ep.team != pTeam && !ep.dead && ep.x != -999f) {
+                    float dxEp = ep.x - pPos.x;
+                    boolean facingEp = (playerFacing == 1 && dxEp >= -0.25f) || (playerFacing == -1 && dxEp <= 0.25f);
+                    if (facingEp && Math.abs(dxEp) <= 1.75f && Math.abs(ep.y - pPos.y) < 1.35f) {
+                        sendActionPacketToPeer("hit", finalDmg, 0, ep.id);
+                        ep.hitFlashTimer = 0.20f;
+                        addDamageText(ep.x, ep.y + 0.5f, finalDmg, Color.RED);
+                        hitAny = true;
+                    }
                 }
             }
             for (int i = 0; i < fighters5v5.size; i++) {
                 Fighter5v5 f = fighters5v5.get(i);
-                if (f.team != pTeam && !f.isDead && f.body != null && Math.abs(f.body.getPosition().x - pPos.x) <= 1.75f && Math.abs(f.body.getPosition().y - pPos.y) < 1.35f) {
-                    boolean killed = f.takeDamage(finalDmg);
-                    spawnHitSparks(f.body.getPosition().x, f.body.getPosition().y + 0.3f, 12, Color.RED);
-                    addDamageText(f.body.getPosition().x, f.body.getPosition().y + 0.5f, finalDmg, Color.RED);
-                    if (killed) on5v5Kill((game != null && game.playerName != null ? game.playerName : "Chiến Thần"), pTeam, f.name, f.team);
+                if (f.team != pTeam && !f.isDead && f.body != null) {
+                    float dxF = f.body.getPosition().x - pPos.x;
+                    boolean facingF = (playerFacing == 1 && dxF >= -0.25f) || (playerFacing == -1 && dxF <= 0.25f);
+                    if (facingF && Math.abs(dxF) <= 1.75f && Math.abs(f.body.getPosition().y - pPos.y) < 1.35f) {
+                        boolean killed = f.takeDamage(finalDmg);
+                        spawnHitSparks(f.body.getPosition().x, f.body.getPosition().y + 0.3f, 12, Color.RED);
+                        addDamageText(f.body.getPosition().x, f.body.getPosition().y + 0.5f, finalDmg, Color.RED);
+                        if (killed) on5v5Kill((game != null && game.playerName != null ? game.playerName : "Chiến Thần"), pTeam, f.name, f.team);
+                        hitAny = true;
+                    }
                 }
+            }
+            if (hitAny && playerAmbushBuff) {
+                playerAmbushBuff = false;
+                addCustomText(pPos.x, pPos.y + 0.8f, "PHỤC KÍCH! +40%", Color.GOLD);
             }
         } else {
             for (int i = activeMonsters.size - 1; i >= 0; i--) {
                 GroundMob m = activeMonsters.get(i);
-                if (m.body != null && Math.abs(m.body.getPosition().x - pPos.x) <= 1.75f
-                    && Math.abs(m.body.getPosition().y - pPos.y) < 1.35f)
-                    damageGroundMob(m, daggerDmg, true);
+                if (m.body != null && !m.isDead) {
+                    float dxM = m.body.getPosition().x - pPos.x;
+                    boolean facingM = (playerFacing == 1 && dxM >= -0.25f) || (playerFacing == -1 && dxM <= 0.25f);
+                    if (facingM && Math.abs(dxM) <= 1.75f && Math.abs(m.body.getPosition().y - pPos.y) < 1.35f)
+                        damageGroundMob(m, daggerDmg, true);
+                }
             }
             if (hasSkyPirate && pirateAlive && Math.abs(pirateX - pPos.x) <= 1.9f && Math.abs(pirateY - pPos.y) < 1.5f) {
                 damagePirate(daggerDmg);
@@ -6869,10 +7382,17 @@ public class GameScreen implements Screen {
     }
 
     private boolean hasBowLock() {
-        return bowLockMob != null || bowLockFighter != null || bowLockTurret != null || bowLockSpecial != 0;
+        return bowLockMob != null || bowLockFighter != null || bowLockTurret != null || bowLockSpecial != 0 || bowLockPeerId != null;
     }
 
     private boolean resolveProjectileTargetPos(Projectile p, Vector2 out) {
+        if (p.targetPeerId != null) {
+            RemotePeer5v5 ep = findExtraPeer(p.targetPeerId);
+            if (ep != null && !ep.dead && ep.x != -999f) {
+                out.set(ep.x, ep.y + 0.22f);
+                return true;
+            }
+        }
         if (p.targetMob != null && p.targetMob.body != null && !p.targetMob.isDead) {
             Vector2 mp = p.targetMob.body.getPosition();
             out.set(mp.x, mp.y + (p.targetMob.isBoss ? 0.35f : 0.22f));
@@ -6916,13 +7436,14 @@ public class GameScreen implements Screen {
         bowLockFighter = null;
         bowLockTurret = null;
         bowLockSpecial = 0;
+        bowLockPeerId = null;
         if (currentWeapon != WeaponType.BOW || playerDead || isMatchEnded || playerBody == null) return;
 
         Vector2 pPos = playerBody.getPosition();
         float bestDist = BOW_LOCK_RANGE;
 
         if (currentGameMode == GameMode.PVP) {
-            if (remoteX != -999f && !remoteDead) {
+            if (remoteX != -999f && !remoteDead && !remoteStealth) {
                 float d = Vector2.dst(pPos.x, pPos.y, remoteX, remoteY);
                 if (d <= bestDist) {
                     bowLockSpecial = 3;
@@ -6934,24 +7455,41 @@ public class GameScreen implements Screen {
 
         if (currentGameMode == GameMode.BATTLE_5V5) {
             int pTeam = (game != null) ? game.selectedTeam : 1;
-            if (remoteX != -999f && !remoteDead && remoteTeam != pTeam
+            if (remoteX != -999f && !remoteDead && remoteTeam != pTeam && !remoteStealth
                 && isRemoteVisibleIn5v5(remoteX, remoteY, remoteTeam, remoteInBush)) {
                 float d = Vector2.dst(pPos.x, pPos.y, remoteX, remoteY);
                 if (d < bestDist) {
                     bestDist = d;
                     bowLockSpecial = 3;
+                    bowLockPeerId = null;
                     bowLockWorldPos.set(remoteX, remoteY + 0.22f);
+                }
+            }
+            for (int epi = 0; epi < extraPeers5v5.size; epi++) {
+                RemotePeer5v5 ep = extraPeers5v5.get(epi);
+                if (ep.team != pTeam && !ep.dead && ep.x != -999f && !ep.stealth
+                    && isRemoteVisibleIn5v5(ep.x, ep.y, ep.team, ep.inBush)) {
+                    float d = Vector2.dst(pPos.x, pPos.y, ep.x, ep.y);
+                    if (d < bestDist) {
+                        bestDist = d;
+                        bowLockSpecial = 0;
+                        bowLockFighter = null;
+                        bowLockTurret = null;
+                        bowLockPeerId = ep.id;
+                        bowLockWorldPos.set(ep.x, ep.y + 0.22f);
+                    }
                 }
             }
             for (int i = 0; i < fighters5v5.size; i++) {
                 Fighter5v5 f = fighters5v5.get(i);
-                if (f.team != pTeam && !f.isDead && f.body != null && !(f.isInBush && !playerInBush)) {
+                if (f.team != pTeam && !f.isDead && f.body != null && !f.isStealth && !(f.isInBush && !playerInBush)) {
                     Vector2 fp = f.body.getPosition();
                     float d = pPos.dst(fp);
                     if (d < bestDist) {
                         bestDist = d;
                         bowLockFighter = f;
                         bowLockSpecial = 0;
+                        bowLockPeerId = null;
                         bowLockWorldPos.set(fp.x, fp.y + 0.22f);
                     }
                 }
@@ -6961,6 +7499,7 @@ public class GameScreen implements Screen {
                 if (d < bestDist) {
                     bestDist = d;
                     bowLockFighter = null;
+                    bowLockPeerId = null;
                     bowLockSpecial = 4;
                     bowLockWorldPos.set(ancientTitan.x, ancientTitan.y + 0.90f);
                 }
@@ -6972,6 +7511,7 @@ public class GameScreen implements Screen {
                     if (d < bestDist) {
                         bestDist = d;
                         bowLockFighter = null;
+                        bowLockPeerId = null;
                         bowLockSpecial = 0;
                         bowLockTurret = t;
                         bowLockWorldPos.set(t.x, t.y + 0.85f);
@@ -7035,9 +7575,20 @@ public class GameScreen implements Screen {
         if (currentGameMode == GameMode.BATTLE_5V5) {
             int pTeam = (game != null) ? game.selectedTeam : 1;
             int finalDmg = (int)(dmg * playerDamageBuff * (playerHasTitanBuff ? 1.35f : 1f));
-            if (!remoteDead && remoteX != -999f && Vector2.dst(cx, cy, remoteX, remoteY) <= radius) {
+            if (!remoteDead && remoteX != -999f && remoteTeam != pTeam && Vector2.dst(cx, cy, remoteX, remoteY) <= radius) {
                 sendActionPacket("hit", finalDmg, 0);
+                remoteHitFlashTimer = 0.20f;
                 spawnHitSparks(remoteX, remoteY + 0.3f, 12, fxColor);
+                addDamageText(remoteX, remoteY + 0.45f, finalDmg, fxColor);
+            }
+            for (int epi = 0; epi < extraPeers5v5.size; epi++) {
+                RemotePeer5v5 ep = extraPeers5v5.get(epi);
+                if (ep.team != pTeam && !ep.dead && ep.x != -999f && Vector2.dst(cx, cy, ep.x, ep.y) <= radius) {
+                    sendActionPacketToPeer("hit", finalDmg, 0, ep.id);
+                    ep.hitFlashTimer = 0.20f;
+                    spawnHitSparks(ep.x, ep.y + 0.3f, 12, fxColor);
+                    addDamageText(ep.x, ep.y + 0.45f, finalDmg, fxColor);
+                }
             }
             for (int i = 0; i < fighters5v5.size; i++) {
                 Fighter5v5 f = fighters5v5.get(i);
@@ -7054,7 +7605,8 @@ public class GameScreen implements Screen {
             GroundMob m = activeMonsters.get(i);
             if (m.body != null && !m.isDead && m.body.getPosition().dst(cx, cy) <= radius) {
                 damageGroundMob(m, dmg, true);
-                if (stunMobs && !m.isDead) {
+                boolean bossImmune = m.isBoss && (m.isChargingBerserk || "SMASH_WINDUP".equals(m.state) || m.isResting || m.isBerserk);
+                if (stunMobs && !m.isDead && !bossImmune) {
                     m.hitTimer = Math.max(m.hitTimer, 0.85f);
                     m.state = "HIT";
                 }
@@ -7076,6 +7628,7 @@ public class GameScreen implements Screen {
         if ("P2".equals(selectedChar) && slot == 1 && p2SwapAvailableTimer > 0f && p2CloneActive) {
             float oldX = playerBody.getPosition().x;
             float oldY = playerBody.getPosition().y;
+            resetTraversalState();
             playerBody.setTransform(p2CloneX, p2CloneY, 0);
             p2CloneX = oldX;
             p2CloneY = oldY;
@@ -7085,7 +7638,7 @@ public class GameScreen implements Screen {
             spawnHitSparks(playerBody.getPosition().x, playerBody.getPosition().y + 0.3f, 22, Color.PURPLE);
             addCustomText(playerBody.getPosition().x, playerBody.getPosition().y + 0.8f, "HOÁN ĐỔI!", Color.PURPLE);
             actionLog.setText("HOÁN ĐỔI THẦN TỐC: Đổi vị trí với Phân Thân Hắc Ám!");
-            broadcastSkillCast(1, 2, playerBody.getPosition().x, playerBody.getPosition().y, playerFacing);
+            broadcastCloneSwap(p2CloneX, p2CloneY, playerFacing);
             return;
         }
 
@@ -7126,11 +7679,14 @@ public class GameScreen implements Screen {
                 playerShield = Math.min(600, playerShield + 200);
                 int dmg = (int)(90 * timeDmgScale) + swordDamageBonus / 2;
 
-                // Triệt tiêu toàn bộ đạn đạo của kẻ địch trong phạm vi 3.2m
+                // Triệt tiêu toàn bộ đạn đạo của kẻ địch trong phạm vi 3.2m (không xóa đạn đồng đội CO-OP / 5v5)
+                int pTeam = (game != null) ? game.selectedTeam : 1;
                 int cleared = 0;
                 for (int pi = projectiles.size - 1; pi >= 0; pi--) {
                     Projectile pr = projectiles.get(pi);
-                    boolean isEnemyProj = pr.fromRemotePeer || (!pr.isArrow && !pr.isSlingshotPellet && !pr.isShotgun && !pr.isCannonBall && pr.skillVisualType == 0);
+                    boolean hostileRemote = pr.fromRemotePeer
+                        && (currentGameMode == GameMode.PVP || (currentGameMode == GameMode.BATTLE_5V5 && pr.ownerTeam != pTeam));
+                    boolean isEnemyProj = hostileRemote || (!pr.fromRemotePeer && !pr.isArrow && !pr.isSlingshotPellet && !pr.isShotgun && !pr.isCannonBall && pr.skillVisualType == 0);
                     if (isEnemyProj && Vector2.dst(pPos.x, pPos.y, pr.x, pr.y) <= 3.2f) {
                         spawnHitSparks(pr.x, pr.y, 8, Color.CYAN);
                         projectiles.removeIndex(pi);
@@ -7191,19 +7747,45 @@ public class GameScreen implements Screen {
 
                 float destX = pPos.x + playerFacing * 3.8f;
                 float destY = pPos.y;
-                for (int i = 0; i < activeMonsters.size; i++) {
-                    GroundMob m = activeMonsters.get(i);
-                    if (m.body != null && !m.isDead && pPos.dst(m.body.getPosition()) <= 5.2f) {
-                        destX = m.body.getPosition().x - m.facing * 0.90f;
-                        destY = m.body.getPosition().y + 0.1f;
-                        playerFacing = m.facing;
-                        break;
+                if (currentGameMode == GameMode.PVP) {
+                    if (remoteX != -999f && !remoteDead && !remoteStealth && pPos.dst(remoteX, remoteY) <= 5.5f) {
+                        destX = remoteX - remoteFacing * 0.90f;
+                        destY = remoteY + 0.1f;
+                        playerFacing = remoteFacing;
                     }
-                }
-                if (currentGameMode == GameMode.PVP && remoteX != -999f && !remoteDead && pPos.dst(remoteX, remoteY) <= 5.5f) {
-                    destX = remoteX - remoteFacing * 0.90f;
-                    destY = remoteY + 0.1f;
-                    playerFacing = remoteFacing;
+                } else if (currentGameMode == GameMode.BATTLE_5V5) {
+                    int pTeam = (game != null) ? game.selectedTeam : 1;
+                    float bestD = 5.5f;
+                    if (remoteX != -999f && !remoteDead && remoteTeam != pTeam && !remoteStealth
+                        && isRemoteVisibleIn5v5(remoteX, remoteY, remoteTeam, remoteInBush)) {
+                        float d = pPos.dst(remoteX, remoteY);
+                        if (d <= bestD) { bestD = d; destX = remoteX - remoteFacing * 0.90f; destY = remoteY + 0.1f; playerFacing = remoteFacing; }
+                    }
+                    for (int epi = 0; epi < extraPeers5v5.size; epi++) {
+                        RemotePeer5v5 ep = extraPeers5v5.get(epi);
+                        if (ep.team != pTeam && !ep.dead && ep.x != -999f && !ep.stealth
+                            && isRemoteVisibleIn5v5(ep.x, ep.y, ep.team, ep.inBush)) {
+                            float d = pPos.dst(ep.x, ep.y);
+                            if (d <= bestD) { bestD = d; destX = ep.x - ep.facing * 0.90f; destY = ep.y + 0.1f; playerFacing = ep.facing; }
+                        }
+                    }
+                    for (int fi = 0; fi < fighters5v5.size; fi++) {
+                        Fighter5v5 f = fighters5v5.get(fi);
+                        if (f.team != pTeam && !f.isDead && f.body != null && !f.isStealth && !(f.isInBush && !playerInBush)) {
+                            float d = pPos.dst(f.body.getPosition());
+                            if (d <= bestD) { bestD = d; destX = f.body.getPosition().x - f.facing * 0.90f; destY = f.body.getPosition().y + 0.1f; playerFacing = f.facing; }
+                        }
+                    }
+                } else {
+                    for (int i = 0; i < activeMonsters.size; i++) {
+                        GroundMob m = activeMonsters.get(i);
+                        if (m.body != null && !m.isDead && pPos.dst(m.body.getPosition()) <= 5.2f) {
+                            destX = m.body.getPosition().x - m.facing * 0.90f;
+                            destY = m.body.getPosition().y + 0.1f;
+                            playerFacing = m.facing;
+                            break;
+                        }
+                    }
                 }
                 destX = MathUtils.clamp(destX, 0.8f, mapWidth - 0.8f);
                 for (int s = 1; s <= 4; s++) {
@@ -7215,6 +7797,7 @@ public class GameScreen implements Screen {
                     ai.color = new Color(0.65f, 0.10f, 0.90f, 0.85f);
                     p2Afterimages.add(ai);
                 }
+                resetTraversalState();
                 playerBody.setTransform(destX, destY, 0);
                 spawnHitSparks(p2CloneX, p2CloneY + 0.3f, 22, Color.PURPLE);
                 SoundManager.getInstance().playDash();
@@ -7319,21 +7902,30 @@ public class GameScreen implements Screen {
                 sp.ownerTeam = (game != null && game.selectedTeam == 2) ? 2 : 1;
 
                 float best = 12.0f;
-                if (currentGameMode == GameMode.PVP && remoteX != -999f && !remoteDead) {
+                if (currentGameMode == GameMode.PVP && remoteX != -999f && !remoteDead && !remoteStealth) {
                     sp.homingArrow = true;
                     sp.targetSpecial = 3;
                 } else if (currentGameMode == GameMode.BATTLE_5V5) {
                     int pTeam = (game != null) ? game.selectedTeam : 1;
-                    for (int fi = 0; fi < fighters5v5.size; fi++) {
-                        Fighter5v5 f = fighters5v5.get(fi);
-                        if (f.team != pTeam && !f.isDead && f.body != null && !(f.isInBush && !playerInBush)) {
-                            float d = f.body.getPosition().dst(sx, sy);
-                            if (d < best) { best = d; sp.targetFighter = f; sp.homingArrow = true; }
+                    if (remoteX != -999f && !remoteDead && remoteTeam != pTeam && !remoteStealth
+                        && isRemoteVisibleIn5v5(remoteX, remoteY, remoteTeam, remoteInBush)) {
+                        float d = Vector2.dst(sx, sy, remoteX, remoteY);
+                        if (d < best) { best = d; sp.homingArrow = true; sp.targetSpecial = 3; }
+                    }
+                    for (int epi = 0; epi < extraPeers5v5.size; epi++) {
+                        RemotePeer5v5 ep = extraPeers5v5.get(epi);
+                        if (ep.team != pTeam && !ep.dead && ep.x != -999f && !ep.stealth
+                            && isRemoteVisibleIn5v5(ep.x, ep.y, ep.team, ep.inBush)) {
+                            float d = Vector2.dst(sx, sy, ep.x, ep.y);
+                            if (d < best) { best = d; sp.homingArrow = true; sp.targetSpecial = 0; sp.targetFighter = null; sp.targetPeerId = ep.id; }
                         }
                     }
-                    if (!sp.homingArrow && remoteX != -999f && !remoteDead) {
-                        sp.homingArrow = true;
-                        sp.targetSpecial = 3;
+                    for (int fi = 0; fi < fighters5v5.size; fi++) {
+                        Fighter5v5 f = fighters5v5.get(fi);
+                        if (f.team != pTeam && !f.isDead && f.body != null && !f.isStealth && !(f.isInBush && !playerInBush)) {
+                            float d = f.body.getPosition().dst(sx, sy);
+                            if (d < best) { best = d; sp.targetFighter = f; sp.targetSpecial = 0; sp.targetPeerId = null; sp.homingArrow = true; }
+                        }
                     }
                 } else {
                     for (int mi = 0; mi < activeMonsters.size; mi++) {
@@ -7355,7 +7947,7 @@ public class GameScreen implements Screen {
             }
         }
 
-        // Remote Vạn Kiếm Quy Tông (CharId=1)
+        // Remote Vạn Kiếm Quy Tông (CharId=1) — chỉ hiển thị hiệu ứng (sát thương đi qua gói "hit" của chủ chiêu)
         if (remoteSwordRainRemaining > 0) {
             remoteSwordRainTick -= delta;
             if (remoteSwordRainTick <= 0f) {
@@ -7363,16 +7955,15 @@ public class GameScreen implements Screen {
                 remoteSwordRainRemaining--;
                 float sx = remoteSwordRainX + MathUtils.random(-0.85f, 0.85f);
                 float sy = remoteSwordRainY + 1.25f + MathUtils.random(0f, 0.35f);
-                int swordDmg = 52;
 
-                Projectile sp = new Projectile(sx, sy, remoteSwordRainFacing * 15.0f, -2.0f, swordDmg, true, false, false, false);
+                Projectile sp = new Projectile(sx, sy, remoteSwordRainFacing * 15.0f, -2.0f, 0, true, false, false, false);
                 sp.skillVisualType = 2;
                 sp.lifeTime = 2.8f;
                 sp.fromRemotePeer = true;
                 sp.ownerTeam = remoteSwordRainTeam;
 
                 int pTeam = (game != null) ? game.selectedTeam : 1;
-                if ((currentGameMode == GameMode.PVP || remoteSwordRainTeam != pTeam) && !playerDead) {
+                if ((currentGameMode == GameMode.PVP || (currentGameMode == GameMode.BATTLE_5V5 && remoteSwordRainTeam != pTeam)) && !playerDead) {
                     sp.homingArrow = true;
                     sp.targetSpecial = 5;
                 }
@@ -7386,15 +7977,51 @@ public class GameScreen implements Screen {
         if (p2CloneActive && !inCutscene()) {
             p2CloneTimer -= delta;
             boolean touchedByEnemy = false;
-            for (int mi = 0; mi < activeMonsters.size; mi++) {
-                GroundMob m = activeMonsters.get(mi);
-                if (m.body != null && !m.isDead && m.body.getPosition().dst(p2CloneX, p2CloneY) <= 1.15f) {
+            if (currentGameMode == GameMode.PVP) {
+                if (remoteX != -999f && !remoteDead && Vector2.dst(remoteX, remoteY, p2CloneX, p2CloneY) <= 1.25f) {
                     touchedByEnemy = true;
-                    break;
+                }
+            } else if (currentGameMode == GameMode.BATTLE_5V5) {
+                int pTeam = (game != null) ? game.selectedTeam : 1;
+                if (remoteX != -999f && !remoteDead && remoteTeam != pTeam
+                    && Vector2.dst(remoteX, remoteY, p2CloneX, p2CloneY) <= 1.25f) {
+                    touchedByEnemy = true;
+                }
+                if (!touchedByEnemy) {
+                    for (int epi = 0; epi < extraPeers5v5.size; epi++) {
+                        RemotePeer5v5 ep = extraPeers5v5.get(epi);
+                        if (ep.team != pTeam && !ep.dead && ep.x != -999f
+                            && Vector2.dst(ep.x, ep.y, p2CloneX, p2CloneY) <= 1.25f) {
+                            touchedByEnemy = true;
+                            break;
+                        }
+                    }
+                }
+                if (!touchedByEnemy) {
+                    for (int fi = 0; fi < fighters5v5.size; fi++) {
+                        Fighter5v5 f = fighters5v5.get(fi);
+                        if (f.team != pTeam && !f.isDead && f.body != null
+                            && f.body.getPosition().dst(p2CloneX, p2CloneY) <= 1.25f) {
+                            touchedByEnemy = true;
+                            break;
+                        }
+                    }
+                }
+            } else {
+                for (int mi = 0; mi < activeMonsters.size; mi++) {
+                    GroundMob m = activeMonsters.get(mi);
+                    if (m.body != null && !m.isDead && m.body.getPosition().dst(p2CloneX, p2CloneY) <= 1.15f) {
+                        touchedByEnemy = true;
+                        break;
+                    }
                 }
             }
             if (p2CloneTimer <= 0f || touchedByEnemy) {
                 p2CloneActive = false;
+                if (p2SwapAvailableTimer > 0f) {
+                    p2SwapAvailableTimer = 0f;
+                    skillCooldowns[1] = 8.0f;
+                }
                 float timeDmgScale = 1.0f + (totalMatchTime / 60f) * 0.22f;
                 int boomDmg = (int)(140 * timeDmgScale) + swordDamageBonus;
                 dealAreaSkillDamage(p2CloneX, p2CloneY, 2.8f, boomDmg, true, Color.PURPLE);
@@ -7406,12 +8033,14 @@ public class GameScreen implements Screen {
             }
         }
 
-        // Remote Ảnh Phân Thân phát nổ (CharId=2)
+        // Remote Ảnh Phân Thân phát nổ (CharId=2) — chỉ hiệu ứng hình ảnh (chủ chiêu gửi gói "hit" chuẩn)
         if (remoteCloneActive) {
             remoteCloneTimer -= delta;
             boolean touchedByPlayer = false;
             int pTeam = (game != null) ? game.selectedTeam : 1;
-            if (remoteCloneTeam != pTeam && playerBody != null && !playerDead) {
+            boolean hostileClone = (currentGameMode == GameMode.PVP)
+                || (currentGameMode == GameMode.BATTLE_5V5 && remoteCloneTeam != pTeam);
+            if (hostileClone && playerBody != null && !playerDead) {
                 if (Vector2.dst(remoteCloneX, remoteCloneY, playerBody.getPosition().x, playerBody.getPosition().y) <= 1.25f) {
                     touchedByPlayer = true;
                 }
@@ -7423,23 +8052,6 @@ public class GameScreen implements Screen {
                 cameraShakeTime = 0.28f; cameraShakeIntensity = 0.26f;
                 SoundManager.getInstance().playHeavyHit();
                 addCustomText(remoteCloneX, remoteCloneY + 0.7f, "PHÂN THÂN NỔ!", Color.MAGENTA);
-                if (remoteCloneTeam != pTeam && playerBody != null && !playerDead) {
-                    if (Vector2.dst(remoteCloneX, remoteCloneY, playerBody.getPosition().x, playerBody.getPosition().y) <= 2.6f) {
-                        int boomDmg = 135;
-                        int dmg = absorbShield(boomDmg);
-                        playerHp = Math.max(0, playerHp - dmg);
-                        playerHpBar.setHp(playerHp);
-                        lblPlayerHp.setText("Máu: " + playerHp + " HP");
-                        playerHitFlashTimer = 0.22f;
-                        SoundManager.getInstance().playHurt();
-                        addDamageText(playerBody.getPosition().x, playerBody.getPosition().y + 0.4f, dmg, Color.PURPLE);
-                        if (playerHp <= 0) {
-                            playerDead = true;
-                            if (currentGameMode == GameMode.BATTLE_5V5) playerRespawnTimer5v5 = 5.0f;
-                            else showGameOverDialog(false);
-                        }
-                    }
-                }
             }
         }
 
@@ -7461,15 +8073,6 @@ public class GameScreen implements Screen {
                     }
                 }
             }
-            if (currentGameMode == GameMode.PVP && remoteX != -999f && !remoteDead) {
-                if (Vector2.dst(p2AbyssX, p2AbyssY, remoteX, remoteY) <= 3.5f) {
-                    if (p2AbyssTick <= 0f) {
-                        sendActionPacket("hit", 24, 0);
-                        p2AbyssShieldAccum = Math.min(400, p2AbyssShieldAccum + 15);
-                        playerShield = Math.min(600, playerShield + 15);
-                    }
-                }
-            }
             if (p2AbyssTick <= 0f) {
                 p2AbyssTick = 0.5f;
                 float timeDmgScale = 1.0f + (totalMatchTime / 60f) * 0.22f;
@@ -7482,31 +8085,19 @@ public class GameScreen implements Screen {
             }
         }
 
-        // Remote Hắc Ám Huyết Trận (CharId=2)
+        // Remote Hắc Ám Huyết Trận (CharId=2) — chỉ hút vật lý khi đối địch (sát thương qua gói "hit" của chủ chiêu)
         if (remoteAbyssTimer > 0f) {
             remoteAbyssTimer -= delta;
             remoteAbyssTick -= delta;
             int pTeam = (game != null) ? game.selectedTeam : 1;
-            if (remoteAbyssTeam != pTeam && playerBody != null && !playerDead) {
+            boolean hostileAbyss = (currentGameMode == GameMode.PVP)
+                || (currentGameMode == GameMode.BATTLE_5V5 && remoteAbyssTeam != pTeam);
+            if (hostileAbyss && playerBody != null && !playerDead) {
                 Vector2 pPos = playerBody.getPosition();
                 float dst = Vector2.dst(remoteAbyssX, remoteAbyssY, pPos.x, pPos.y);
                 if (dst <= 3.6f) {
                     float pull = (remoteAbyssX > pPos.x) ? 1.6f : -1.6f;
                     playerBody.applyLinearImpulse(new Vector2(pull * delta * 5.5f, 0f), playerBody.getWorldCenter(), true);
-                    if (remoteAbyssTick <= 0f) {
-                        int abyssDmg = 18;
-                        int dmg = absorbShield(abyssDmg);
-                        playerHp = Math.max(0, playerHp - dmg);
-                        playerHpBar.setHp(playerHp);
-                        lblPlayerHp.setText("Máu: " + playerHp + " HP");
-                        playerHitFlashTimer = 0.14f;
-                        addDamageText(pPos.x, pPos.y + 0.35f, dmg, Color.PURPLE);
-                        if (playerHp <= 0) {
-                            playerDead = true;
-                            if (currentGameMode == GameMode.BATTLE_5V5) playerRespawnTimer5v5 = 5.0f;
-                            else showGameOverDialog(false);
-                        }
-                    }
                 }
             }
             if (remoteAbyssTick <= 0f) remoteAbyssTick = 0.5f;
@@ -7514,7 +8105,8 @@ public class GameScreen implements Screen {
     }
 
     private void triggerEagleStrike() {
-        if (isEagleStriking || playerDead || isMatchEnded || isGrabbedByPirate || playerStunTimer > 0) return;
+        if (isEagleStriking || playerDead || isAssassinating || isMatchEnded || isPaused || inCutscene()
+            || isGrabbedByPirate || playerStunTimer > 0) return;
 
         Vector2 pos = playerBody.getPosition();
         boolean isHighGround = (pos.y >= 3.5f || isPlayerOnTowerSummit() || (isClimbing && pos.y >= 3.2f));
@@ -7524,7 +8116,8 @@ public class GameScreen implements Screen {
             return;
         }
 
-        if (lockOnEnemy == null && lockOnFighter == null && currentGameMode != GameMode.PVP) {
+        boolean hasHumanTarget = lockOnIsPrimaryRemote || lockOnPeerId != null;
+        if (lockOnEnemy == null && lockOnFighter == null && !hasHumanTarget && currentGameMode != GameMode.PVP) {
             actionLog.setText("KHÔNG CÓ MỤC TIÊU TRONG TẦM MẮT ĐỂ ƯNG KÍCH!");
             return;
         }
@@ -7532,6 +8125,9 @@ public class GameScreen implements Screen {
         // dưới 2.8m mục tiêu bị mất và nhân vật lao lệch sang con quái đầu tiên trong danh sách.
         eagleTargetMob = lockOnEnemy;
         eagleTargetFighter = lockOnFighter;
+        eagleTargetIsPrimaryRemote = lockOnIsPrimaryRemote;
+        eagleTargetPeerId = lockOnPeerId;
+        pendingEagleGroundAbort = false;
 
         isEagleStriking = true;
         eagleStrikePhase = 1; // Phase 1: High-diver Athletic Leaping Arc Launch
@@ -7551,7 +8147,11 @@ public class GameScreen implements Screen {
         float targetX;
         if (eagleTargetMob != null && eagleTargetMob.body != null) targetX = eagleTargetMob.body.getPosition().x;
         else if (eagleTargetFighter != null && eagleTargetFighter.body != null) targetX = eagleTargetFighter.body.getPosition().x;
-        else if (currentGameMode == GameMode.PVP) targetX = remoteX;
+        else if (eagleTargetIsPrimaryRemote && remoteX != -999f) targetX = remoteX;
+        else if (eagleTargetPeerId != null) {
+            RemotePeer5v5 ep = findExtraPeer(eagleTargetPeerId);
+            targetX = (ep != null && ep.x != -999f) ? ep.x : (playerBody.getPosition().x + playerFacing);
+        } else if (currentGameMode == GameMode.PVP && remoteX != -999f) targetX = remoteX;
         else targetX = playerBody.getPosition().x + playerFacing;
         float pushDir = Math.signum(targetX - playerBody.getPosition().x);
         if (pushDir == 0) pushDir = playerFacing;
@@ -7564,11 +8164,14 @@ public class GameScreen implements Screen {
     private void stopEagleStrike(boolean hitTarget) {
         isEagleStriking = false;
         eagleStrikePhase = 0;
+        pendingEagleGroundAbort = false;
         playerBody.setGravityScale(1f);
         playerBody.setBullet(false);
 
         eagleTargetMob = null;
         eagleTargetFighter = null;
+        eagleTargetIsPrimaryRemote = false;
+        eagleTargetPeerId = null;
 
         if (hitTarget) {
             SoundManager.getInstance().playHeavyHit();
@@ -7590,7 +8193,7 @@ public class GameScreen implements Screen {
         Vector2 pos = playerBody.getPosition();
         boolean hit = false;
         if (currentGameMode == GameMode.PVP) {
-            if (pos.dst(remoteX, remoteY) <= radius && !remoteDead) {
+            if (remoteX != -999f && pos.dst(remoteX, remoteY) <= radius && !remoteDead) {
                 sendActionPacket("hit", EAGLE_DMG, 0);
                 hit = true;
             }
@@ -7608,6 +8211,23 @@ public class GameScreen implements Screen {
         if (currentGameMode == GameMode.BATTLE_5V5) {
             int pTeam = (game != null) ? game.selectedTeam : 1;
             int dmg = (int) (EAGLE_DMG * playerDamageBuff * (playerHasTitanBuff ? 1.35f : 1f));
+            if (remoteX != -999f && !remoteDead && remoteTeam != pTeam && pos.dst(remoteX, remoteY) <= radius) {
+                sendActionPacket("hit", dmg, 0);
+                remoteHitFlashTimer = 0.25f;
+                spawnHitSparks(remoteX, remoteY + 0.3f, 25, Color.GOLD);
+                addDamageText(remoteX, remoteY + 0.5f, dmg, Color.GOLD);
+                hit = true;
+            }
+            for (int epi = 0; epi < extraPeers5v5.size; epi++) {
+                RemotePeer5v5 ep = extraPeers5v5.get(epi);
+                if (ep.team != pTeam && !ep.dead && ep.x != -999f && pos.dst(ep.x, ep.y) <= radius) {
+                    sendActionPacketToPeer("hit", dmg, 0, ep.id);
+                    ep.hitFlashTimer = 0.25f;
+                    spawnHitSparks(ep.x, ep.y + 0.3f, 25, Color.GOLD);
+                    addDamageText(ep.x, ep.y + 0.5f, dmg, Color.GOLD);
+                    hit = true;
+                }
+            }
             for (int i = 0; i < fighters5v5.size; i++) {
                 Fighter5v5 f = fighters5v5.get(i);
                 if (f.team != pTeam && !f.isDead && f.body != null && pos.dst(f.body.getPosition()) <= radius) {
@@ -7660,14 +8280,12 @@ public class GameScreen implements Screen {
 
     private void createMobileUI() {
         uiStage = new Stage(new FitViewport(1280, 720));
-        Gdx.input.setInputProcessor(uiStage);
 
         skin = new Skin();
         Pixmap pixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
         pixmap.setColor(Color.WHITE);
         pixmap.fill();
-        skin.add("white", new Texture(pixmap));
-        pixmap.dispose(); // FIX: was leaking native memory
+        skin.add("white", managedTex(pixmap));
 
         // Font & style dùng chung từ UiKit (font Linear mượt, nút bo góc viền vàng).
         // Không add font vào skin nữa: font thuộc UiKit, skin.dispose() sẽ không hủy nhầm.
@@ -7956,16 +8574,14 @@ public class GameScreen implements Screen {
         padBgPix.setColor(new Color(0.85f, 0.75f, 0.40f, 0.85f));
         padBgPix.drawCircle(90, 90, 86);
         padBgPix.drawCircle(90, 90, 85);
-        padBgTex = new Texture(padBgPix);
-        padBgPix.dispose();
+        padBgTex = managedTex(padBgPix);
 
         Pixmap padKnobPix = new Pixmap(78, 78, Pixmap.Format.RGBA8888);
         padKnobPix.setColor(new Color(0.85f, 0.25f, 0.2f, 0.85f));
         padKnobPix.fillCircle(39, 39, 36);
         padKnobPix.setColor(Color.WHITE);
         padKnobPix.drawCircle(39, 39, 36);
-        padKnobTex = new Texture(padKnobPix);
-        padKnobPix.dispose();
+        padKnobTex = managedTex(padKnobPix);
 
         Touchpad.TouchpadStyle touchpadStyle = new Touchpad.TouchpadStyle();
         touchpadStyle.background = new TextureRegionDrawable(new TextureRegion(padBgTex));
@@ -8135,9 +8751,11 @@ public class GameScreen implements Screen {
 
         btnJump.addListener(new ClickListener() {
             @Override public boolean touchDown(InputEvent event, float x, float y, int pointer, int button) {
+                super.touchDown(event, x, y, pointer, button);
                 event.stop();
                 event.handle();
-                triggerJump(false, false);
+                float kx = (touchpad != null && touchpad.isVisible()) ? touchpad.getKnobPercentX() : 0f;
+                triggerJump(kx < -0.25f, kx > 0.25f);
                 return true;
             }
         });
@@ -8147,10 +8765,11 @@ public class GameScreen implements Screen {
         });
         btnAtk.addListener(new ClickListener() {
             @Override public boolean touchDown(InputEvent event, float x, float y, int pointer, int button) {
+                super.touchDown(event, x, y, pointer, button);
                 event.stop();
                 event.handle();
                 isAttackButtonPressed = true;
-                triggerAttack();
+                triggerAttack(false);
                 return true;
             }
             @Override public void touchUp(InputEvent event, float x, float y, int pointer, int button) {
@@ -8175,6 +8794,10 @@ public class GameScreen implements Screen {
         });
 
         createShopUI(font, btnStyle);
+        // Đảm bảo lớp phủ & hộp thoại tạm dừng / kết thúc luôn nằm trên tiệm đồ, bảng chat và nút HUD
+        if (modalOverlay != null) modalOverlay.toFront();
+        if (pauseDialog != null) pauseDialog.toFront();
+        if (gameOverDialog != null) gameOverDialog.toFront();
         updateScoreGoldUI(); // hiện ngay số vàng tiêu được (kể cả vàng trong kho khi chơi đơn)
     }
 
@@ -8258,13 +8881,13 @@ public class GameScreen implements Screen {
             String speaker = commsManager.getRemoteSpeaker();
             if (speaker != null && !speaker.isEmpty()) {
                 lblVoiceStatus.setColor(UiKit.SUCCESS);
-                lblVoiceStatus.setText("🔊 " + speaker + " đang nói...");
+                lblVoiceStatus.setText("[THOẠI] " + speaker + " đang nói...");
             } else if (commsManager.toastTimer > 0f && !chatPanelOpen && !commsManager.toastText.isEmpty()) {
                 lblVoiceStatus.setColor(UiKit.GOLD);
-                lblVoiceStatus.setText("💬 " + commsManager.toastText);
+                lblVoiceStatus.setText("[CHAT] " + commsManager.toastText);
             } else if (commsManager.isLocalSpeaking()) {
                 lblVoiceStatus.setColor(Color.CYAN);
-                lblVoiceStatus.setText("🎙 Bạn đang phát thoại...");
+                lblVoiceStatus.setText("[MIC] Bạn đang phát thoại...");
             } else {
                 lblVoiceStatus.setText("");
             }
@@ -8286,26 +8909,28 @@ public class GameScreen implements Screen {
                     isGrounded = true;
                     jumpCount = 0;
                     coyoteTimer = COYOTE_TIME_MAX;
-                    if (jumpBufferTimer > 0f) {
-                        jumpBufferTimer = 0f;
-                        triggerJump(moveLeft, moveRight);
-                    }
                     climbStamina = MAX_CLIMB_STAMINA;
-                    if (isEagleStriking) stopEagleStrike(false);
+
+                    Fixture groundFix = "ground".equals(fa.getUserData()) ? fa : fb;
+                    if (isEagleStriking && eagleStrikePhase == 2 && groundFix.getBody().getPosition().y <= 0.85f) {
+                        pendingEagleGroundAbort = true;
+                    }
 
                     if (isFallingFromSky) {
                         isFallingFromSky = false;
-                        playerHp = Math.max(0, playerHp - FALL_PENALTY);
-                        playerHpBar.setHp(playerHp);
-                        lblPlayerHp.setText("Máu: " + playerHp + " HP");
-                        playerHitFlashTimer = 0.25f;
-                        SoundManager.getInstance().playHurt();
-                        addDamageText(playerBody.getPosition().x, playerBody.getPosition().y + 0.4f,
-                            FALL_PENALTY, Color.RED);
-                        actionLog.setText("RƠI TỪ TRÊN CAO! MẤT " + FALL_PENALTY + " HP!"); // FIX: accurate text
-                        cameraShakeTime = 0.5f;
-                        cameraShakeIntensity = 0.35f;
-                        if (playerHp <= 0) { playerDead = true; showGameOverDialog(false); }
+                        if (!playerDead && !isMatchEnded) {
+                            playerHp = Math.max(0, playerHp - FALL_PENALTY);
+                            playerHpBar.setHp(playerHp);
+                            lblPlayerHp.setText("Máu: " + playerHp + " HP");
+                            playerHitFlashTimer = 0.25f;
+                            SoundManager.getInstance().playHurt();
+                            addDamageText(playerBody.getPosition().x, playerBody.getPosition().y + 0.4f,
+                                FALL_PENALTY, Color.RED);
+                            actionLog.setText("RƠI TỪ TRÊN CAO! MẤT " + FALL_PENALTY + " HP!");
+                            cameraShakeTime = 0.5f;
+                            cameraShakeIntensity = 0.35f;
+                            if (playerHp <= 0) { playerDead = true; showGameOverDialog(false); }
+                        }
                     }
                 }
             }
@@ -8344,7 +8969,13 @@ public class GameScreen implements Screen {
                 }
 
                 if (isPlayer && isEagleStriking) {
-                    if (!isMonster) contact.setEnabled(false);
+                    // Chỉ xuyên qua các bục gỗ trên cao khi đang lao xuống; luôn giữ tường biên và mặt đất chính
+                    if (isGround) {
+                        Fixture groundFix = "ground".equals(fa.getUserData()) ? fa : fb;
+                        if (groundFix.getBody().getPosition().y > 0.80f) {
+                            contact.setEnabled(false);
+                        }
+                    }
                     return;
                 }
 
@@ -8403,7 +9034,7 @@ public class GameScreen implements Screen {
             targetCameraZoom = 1.0f;  // Normal gameplay zoom
         }
 
-        currentCameraZoom += (targetCameraZoom - currentCameraZoom) * 3.5f * delta;
+        currentCameraZoom += (targetCameraZoom - currentCameraZoom) * Math.min(1f, 3.5f * delta);
         camera.zoom = currentCameraZoom;
 
         // Co-op: Camera bám theo đồng đội nếu mình chết và đã chọn "Đợi hồi sinh"
@@ -8428,16 +9059,20 @@ public class GameScreen implements Screen {
             camera.position.set(targetX, targetY, 0);
             isFirstCameraFrame = false;
         } else {
-            camera.position.x += (targetX - camera.position.x) * (bossIntroActive ? 4.5f : 6.5f) * delta;
-            camera.position.y += (targetY - camera.position.y) * (bossIntroActive ? 4.5f : 6.5f) * delta;
+            float camLerp = Math.min(1f, (bossIntroActive ? 4.5f : 6.5f) * delta);
+            camera.position.x += (targetX - camera.position.x) * camLerp;
+            camera.position.y += (targetY - camera.position.y) * camLerp;
         }
         camera.update();
     }
 
     private void updateRopesAndSwinging(float delta) {
+        if (inCutscene() || isPaused) return;
         Vector2 pos = playerBody.getPosition();
-        boolean inputL = moveLeft || Gdx.input.isKeyPressed(Input.Keys.A) || Gdx.input.isKeyPressed(Input.Keys.LEFT);
-        boolean inputR = moveRight || Gdx.input.isKeyPressed(Input.Keys.D) || Gdx.input.isKeyPressed(Input.Keys.RIGHT);
+        boolean chatTyping = isChatTyping();
+        float kx = (touchpad != null && touchpad.isVisible()) ? touchpad.getKnobPercentX() : 0f;
+        boolean inputL = moveLeft || kx < -0.25f || (!chatTyping && (Gdx.input.isKeyPressed(Input.Keys.A) || Gdx.input.isKeyPressed(Input.Keys.LEFT)));
+        boolean inputR = moveRight || kx > 0.25f || (!chatTyping && (Gdx.input.isKeyPressed(Input.Keys.D) || Gdx.input.isKeyPressed(Input.Keys.RIGHT)));
 
         // 1. Nếu đang đu dây
         if (isSwinging && currentSwingingRope != null) {
@@ -8463,7 +9098,8 @@ public class GameScreen implements Screen {
             }
         } else {
             // 2. Kiểm tra xem người chơi nhảy vào bám dây đu không
-            if (swingCooldown <= 0 && !playerDead && !isMatchEnded && playerStunTimer <= 0 && !isGrounded) {
+            if (swingCooldown <= 0 && !playerDead && !isMatchEnded && playerStunTimer <= 0 && !isGrounded
+                && !isEagleStriking && !isP1UltActive && !isP2DashingAssassinate && !isAssassinating && !isGrabbedByPirate) {
                 for (int i = 0; i < swingRopes.size; i++) {
                     SwingRope r = swingRopes.get(i);
                     Vector2 tip = r.getTipPosition();
@@ -8502,8 +9138,11 @@ public class GameScreen implements Screen {
 
     @Override
     public void render(float delta) {
+        delta = Math.min(delta, 0.05f);
         totalMatchTime += delta;
         if (storyDialogueActive || shopFreezesWorld()) frozenTime += delta;
+        if (playerPoisonSlowTimer > 0f) playerPoisonSlowTimer = Math.max(0f, playerPoisonSlowTimer - delta);
+        if (reviveCooldownTimer > 0f) reviveCooldownTimer = Math.max(0f, reviveCooldownTimer - delta);
 
         // Hội thoại cốt truyện: mở đầu ải ở khung hình đầu tiên; xử lý phím trước mọi điều khiển khác
         if (story != null && !storyIntroStarted && playerBody != null) startStoryIntro();
@@ -8526,17 +9165,18 @@ public class GameScreen implements Screen {
         remoteAttackAnimTime += delta;
 
         // FIX: interpolate remote player position (was snapping / teleporting)
+        float netLerp = Math.min(1f, 12f * delta);
         if (targetRemoteX != -999f) {
-            remoteX += (targetRemoteX - remoteX) * 12f * delta;
-            remoteY += (targetRemoteY - remoteY) * 12f * delta;
+            remoteX += (targetRemoteX - remoteX) * netLerp;
+            remoteY += (targetRemoteY - remoteY) * netLerp;
         }
         for (int epi = 0; epi < extraPeers5v5.size; epi++) {
             RemotePeer5v5 ep = extraPeers5v5.get(epi);
             ep.attackAnimTime += delta;
             if (ep.hitFlashTimer > 0f) ep.hitFlashTimer -= delta;
             if (ep.targetX != -999f) {
-                ep.x += (ep.targetX - ep.x) * 12f * delta;
-                ep.y += (ep.targetY - ep.y) * 12f * delta;
+                ep.x += (ep.targetX - ep.x) * netLerp;
+                ep.y += (ep.targetY - ep.y) * netLerp;
             }
         }
 
@@ -8630,28 +9270,31 @@ public class GameScreen implements Screen {
             if (multiKillWindow <= 0) playerMultiKill = 0;
         }
 
-        // 5v5 ARAM Battle Updates
-        if (currentGameMode == GameMode.BATTLE_5V5) {
-            for (int i = 0; i < powerUpRunes.size; i++) {
-                PowerUpRune rune = powerUpRunes.get(i);
-                rune.pulseTime += delta;
-                if (!rune.active) {
-                    rune.respawnTimer -= delta;
-                    if (rune.respawnTimer <= 0) {
-                        rune.active = true;
-                        rune.respawnTimer = 0f;
+        // Jump Pads, Power-up Runes & Tactical Bushes (hoạt động trên cả 5v5 và CO-OP)
+        if (!inCutscene() && !isPaused) {
+            if (!powerUpRunes.isEmpty()) {
+                for (int i = 0; i < powerUpRunes.size; i++) {
+                    PowerUpRune rune = powerUpRunes.get(i);
+                    rune.pulseTime += delta;
+                    if (!rune.active) {
+                        rune.respawnTimer -= delta;
+                        if (rune.respawnTimer <= 0) {
+                            rune.active = true;
+                            rune.respawnTimer = 0f;
+                        }
                     }
                 }
             }
 
-            for (int i = 0; i < jumpPads.size; i++) {
-                JumpPad pad = jumpPads.get(i);
-                pad.animTime += delta;
-                if (pad.cooldown > 0) pad.cooldown -= delta;
+            if (!jumpPads.isEmpty()) {
+                for (int i = 0; i < jumpPads.size; i++) {
+                    JumpPad pad = jumpPads.get(i);
+                    pad.animTime += delta;
+                    if (pad.cooldown > 0) pad.cooldown -= delta;
+                }
             }
 
-            // Local player Jump Pad check
-            if (playerBody != null && !playerDead) {
+            if (playerBody != null && !playerDead && !isMatchEnded) {
                 Vector2 pPos = playerBody.getPosition();
                 for (int i = 0; i < jumpPads.size; i++) {
                     JumpPad pad = jumpPads.get(i);
@@ -8667,7 +9310,6 @@ public class GameScreen implements Screen {
                     }
                 }
 
-                // Local player Contested Runes pickup check
                 for (int i = 0; i < powerUpRunes.size; i++) {
                     PowerUpRune rune = powerUpRunes.get(i);
                     if (rune.active && pPos.dst(rune.x, rune.y) <= 1.0f) {
@@ -8719,18 +9361,35 @@ public class GameScreen implements Screen {
                         }
                     }
                 }
-            }
 
-            // Local player rune timer
-            if (playerRuneTimer > 0) {
-                playerRuneTimer -= delta;
-                if (playerRuneTimer <= 0) {
-                    playerDamageBuff = 1.0f;
-                    playerSpeedBuff = 1.0f;
-                    playerActiveRune = null;
+                // Ẩn nấp bụi rậm chiến thuật
+                playerInBush = false;
+                for (int i = 0; i < tacticalBushes.size; i++) {
+                    TacticalBush bush = tacticalBushes.get(i);
+                    if (bush.contains(pPos)) {
+                        playerInBush = true;
+                        if (!playerAmbushBuff) {
+                            playerAmbushBuff = true;
+                            addCustomText(pPos.x, pPos.y + 0.8f, "ẨN NẤP: PHỤC KÍCH!", Color.GREEN);
+                        }
+                        break;
+                    }
                 }
             }
+        }
 
+        // Local player rune timer
+        if (playerRuneTimer > 0) {
+            playerRuneTimer -= delta;
+            if (playerRuneTimer <= 0) {
+                playerDamageBuff = 1.0f;
+                playerSpeedBuff = 1.0f;
+                playerActiveRune = null;
+            }
+        }
+
+        // 5v5 ARAM Battle Updates
+        if (currentGameMode == GameMode.BATTLE_5V5) {
             // Local player Dragon Slayer buff timer
             if (playerTitanBuffTimer > 0) {
                 playerTitanBuffTimer -= delta;
@@ -8739,7 +9398,7 @@ public class GameScreen implements Screen {
                 }
             }
 
-            // Local player Fountain & Bush checks
+            // Local player Fountain checks
             if (playerBody != null && !playerDead) {
                 Vector2 pPos = playerBody.getPosition();
                 int pTeam = (game != null) ? game.selectedTeam : 1;
@@ -8772,33 +9431,8 @@ public class GameScreen implements Screen {
                         lblPlayerHp.setText("Máu: " + playerHp + " HP");
                         spawnHitSparks(pPos.x, pPos.y + 0.3f, 4, Color.MAGENTA);
                         if (playerHp <= 0) {
-                            playerDead = true;
-                            if (playerBody != null) {
-                                playerDeathX = playerBody.getPosition().x;
-                                playerDeathY = playerBody.getPosition().y;
-                                playerDeathBlinkTimer = 0.85f;
-                            }
-                            playerRespawnTimer5v5 = 5.0f;
-                            String zapVictim = (game.playerName != null ? game.playerName : "Chiến Thần");
-                            on5v5Kill("Tia Phòng Ngự Hồ Máu", (pTeam == 1 ? 2 : 1), zapVictim, pTeam);
-                            // Trận trực tuyến: báo cho cả phòng để tỉ số 30 mạng giống nhau trên mọi máy
-                            broadcast5v5Kill("Tia Phòng Ngự Hồ Máu", (pTeam == 1 ? 2 : 1), zapVictim, pTeam);
-                            sendSyncPacket("IDLE");
+                            handleLocalPlayerDeath5v5("Tia Phòng Ngự Hồ Máu", (pTeam == 1 ? 2 : 1));
                         }
-                    }
-                }
-
-                // An nap bui ram chien thuat
-                playerInBush = false;
-                for (int i = 0; i < tacticalBushes.size; i++) {
-                    TacticalBush bush = tacticalBushes.get(i);
-                    if (bush.contains(pPos)) {
-                        playerInBush = true;
-                        if (!playerAmbushBuff) {
-                            playerAmbushBuff = true;
-                            addCustomText(pPos.x, pPos.y + 0.8f, "ẨN NẤP: PHỤC KÍCH!", Color.GREEN);
-                        }
-                        break;
                     }
                 }
             }
@@ -8836,7 +9470,7 @@ public class GameScreen implements Screen {
                 ancientTitan.update(delta);
                 Vector2 pPos = playerBody.getPosition();
                 int pTeam = (game != null) ? game.selectedTeam : 1;
-                if (ancientTitan.isAlive && ancientTitan.attackCooldown <= 0) {
+                if (ancientTitan.canAttack()) {
                     Vector2 tPos = ancientTitan.getPosition();
                     boolean hasVictim = false;
                     int titanFacing = 1;
@@ -8855,19 +9489,14 @@ public class GameScreen implements Screen {
                         }
                     }
 
-                    if (hasVictim) {
-                        ancientTitan.triggerAttack(titanFacing);
+                    if (hasVictim && ancientTitan.triggerAttack(titanFacing)) {
                         SoundManager.getInstance().playBossSmash();
                         cameraShakeTime = 0.28f; cameraShakeIntensity = 0.22f;
                         spawnHitSparks(tPos.x, tPos.y - 0.2f, 25, Color.GOLD);
 
                         // AOE Slam Damage
                         if (!playerDead && pPos.dst(tPos) < 3.2f) {
-                            int tDmg = 50;
-                            if (playerShield > 0) {
-                                if (playerShield >= tDmg) { playerShield -= tDmg; tDmg = 0; }
-                                else { tDmg -= playerShield; playerShield = 0; }
-                            }
+                            int tDmg = absorbShield(50);
                             playerHp = Math.max(0, playerHp - tDmg);
                             playerHpBar.setHp(playerHp);
                             lblPlayerHp.setText("Máu: " + playerHp + " HP");
@@ -8875,13 +9504,18 @@ public class GameScreen implements Screen {
                             addDamageText(pPos.x, pPos.y + 0.5f, tDmg, Color.RED);
                             if (playerHp <= 0) {
                                 playerDead = true;
+                                closeShop();
+                                resetTraversalState();
                                 if (playerBody != null) {
                                     playerDeathX = playerBody.getPosition().x;
                                     playerDeathY = playerBody.getPosition().y;
                                     playerDeathBlinkTimer = 0.85f;
                                 }
                                 playerRespawnTimer5v5 = 5.0f;
-                                on5v5Kill("Thần Thú Bạo Chúa", 0, (game != null && game.playerName != null ? game.playerName : "Chiến Thần"), pTeam);
+                                String titanVictim = (game != null && game.playerName != null ? game.playerName : "Chiến Thần");
+                                on5v5Kill("Thần Thú Bạo Chúa", 0, titanVictim, pTeam);
+                                broadcast5v5Kill("Thần Thú Bạo Chúa", 0, titanVictim, pTeam);
+                                sendSyncPacket("IDLE");
                             }
                         }
                         for (int i = 0; i < fighters5v5.size; i++) {
@@ -8946,11 +9580,7 @@ public class GameScreen implements Screen {
                         for (float step = 0.25f; step <= 0.75f; step += 0.25f) {
                             spawnHitSparks(MathUtils.lerp(turret.x, pPos.x, step), MathUtils.lerp(turret.y + 1.2f, pPos.y + 0.3f, step), 3, shotColor);
                         }
-                        int tDmg = 45;
-                        if (playerShield > 0) {
-                            if (playerShield >= tDmg) { playerShield -= tDmg; tDmg = 0; }
-                            else { tDmg -= playerShield; playerShield = 0; }
-                        }
+                        int tDmg = absorbShield(45);
                         playerHp = Math.max(0, playerHp - tDmg);
                         playerHpBar.setHp(playerHp);
                         lblPlayerHp.setText("Máu: " + playerHp + " HP");
@@ -8959,14 +9589,7 @@ public class GameScreen implements Screen {
                         SoundManager.getInstance().playHeavyHit();
                         cameraShakeTime = 0.18f; cameraShakeIntensity = 0.14f;
                         if (playerHp <= 0) {
-                            playerDead = true;
-                            if (playerBody != null) {
-                                playerDeathX = playerBody.getPosition().x;
-                                playerDeathY = playerBody.getPosition().y;
-                                playerDeathBlinkTimer = 0.85f;
-                            }
-                            playerRespawnTimer5v5 = 5.0f;
-                            on5v5Kill("Tháp Tiền Đồn", turret.team, (game != null && game.playerName != null ? game.playerName : "Chiến Thần"), pTeam);
+                            handleLocalPlayerDeath5v5("Tháp Tiền Đồn", turret.team);
                         }
                         continue;
                     }
@@ -9002,28 +9625,18 @@ public class GameScreen implements Screen {
                     if (f.team != pTeam && !playerDead) {
                         float dx = (pPos.x - fPos.x) * f.facing;
                         if (dx >= -0.2f && dx <= 1.6f && Math.abs(pPos.y - fPos.y) <= 1.2f) {
-                            if (playerShield > 0) {
-                                if (playerShield >= fDmg) { playerShield -= fDmg; fDmg = 0; }
-                                else { fDmg -= playerShield; playerShield = 0; }
-                            }
-                            playerHp = Math.max(0, playerHp - fDmg);
+                            int actualFDmg = absorbShield(fDmg);
+                            playerHp = Math.max(0, playerHp - actualFDmg);
                             playerHpBar.setHp(playerHp);
                             lblPlayerHp.setText("Máu: " + playerHp + " HP");
                             spawnHitSparks(pPos.x, pPos.y + 0.2f, 15, Color.RED);
-                            addDamageText(pPos.x, pPos.y + 0.5f, fDmg, Color.RED);
+                            addDamageText(pPos.x, pPos.y + 0.5f, actualFDmg, Color.RED);
                             cameraShakeTime = (f.attackCombo == 3) ? 0.24f : 0.15f;
                             cameraShakeIntensity = (f.attackCombo == 3) ? 0.20f : 0.12f;
                             SoundManager.getInstance().playHurt();
 
                             if (playerHp <= 0) {
-                                playerDead = true;
-                                if (playerBody != null) {
-                                    playerDeathX = playerBody.getPosition().x;
-                                    playerDeathY = playerBody.getPosition().y;
-                                    playerDeathBlinkTimer = 0.85f;
-                                }
-                                playerRespawnTimer5v5 = 5.0f;
-                                on5v5Kill(f.name, f.team, (game != null && game.playerName != null ? game.playerName : "Chiến Thần"), pTeam);
+                                handleLocalPlayerDeath5v5(f.name, f.team);
                             }
                         }
                     }
@@ -9129,7 +9742,7 @@ public class GameScreen implements Screen {
         }
 
         // Điều khiển bằng bàn phím cho Hộp thoại Kết thúc trận (Game Over / Qua ải)
-        if (!modalConsumed && gameOverDialog != null && gameOverDialog.isVisible()) {
+        if (!modalConsumed && !storyInputUsedThisFrame() && gameOverDialog != null && gameOverDialog.isVisible()) {
             if (Gdx.input.isKeyJustPressed(Input.Keys.ENTER) || Gdx.input.isKeyJustPressed(Input.Keys.NUMPAD_ENTER)
                 || Gdx.input.isKeyJustPressed(Input.Keys.SPACE)) {
                 restartOrReturnLobby();
@@ -9188,6 +9801,7 @@ public class GameScreen implements Screen {
         }
 
         // Native Keyboard & Mouse Input (hỗ trợ đầy đủ 2 kiểu cầm phím Laptop: WASD+JKL/UIOY và Mũi tên+ZXC/Ctrl/Shift)
+        boolean mouseAimUp = false;
         if (!chatTyping && !modalConsumed && !isMatchEnded && !isPaused && !isShopOpen
             && playerStunTimer <= 0 && !inCutscene() && !storyInputUsedThisFrame()) {
             boolean isDesktop = isDesktopPlatform();
@@ -9294,7 +9908,7 @@ public class GameScreen implements Screen {
                             playerFacing = (dx > 0) ? 1 : -1;
                         }
                         if (dy > 1.8f) {
-                            isAimingUp = true;
+                            mouseAimUp = true;
                         }
                     }
                 }
@@ -9372,8 +9986,8 @@ public class GameScreen implements Screen {
             return;
         }
 
-        float padKnobX = (touchpad != null) ? touchpad.getKnobPercentX() : 0f;
-        float padKnobY = (touchpad != null) ? touchpad.getKnobPercentY() : 0f;
+        float padKnobX = (touchpad != null && touchpad.isVisible()) ? touchpad.getKnobPercentX() : 0f;
+        float padKnobY = (touchpad != null && touchpad.isVisible()) ? touchpad.getKnobPercentY() : 0f;
 
         boolean padLeft = padKnobX < -0.2f;
         boolean padRight = padKnobX > 0.2f;
@@ -9383,7 +9997,7 @@ public class GameScreen implements Screen {
         boolean kRight = !chatTyping && (Gdx.input.isKeyPressed(Input.Keys.D) || Gdx.input.isKeyPressed(Input.Keys.RIGHT));
         boolean kUp = !chatTyping && (Gdx.input.isKeyPressed(Input.Keys.W) || Gdx.input.isKeyPressed(Input.Keys.UP));
         boolean kClimbHold = !chatTyping && (Gdx.input.isKeyPressed(Input.Keys.R) || Gdx.input.isKeyPressed(Input.Keys.SEMICOLON));
-        isAimingUp = isAimingUpHold || kUp || padUp;
+        isAimingUp = isAimingUpHold || kUp || padUp || mouseAimUp;
 
         boolean movingLeft = (moveLeft || kLeft || padLeft) && playerStunTimer <= 0 && !isPaused && !storyDialogueActive && !shopFreezesWorld();
         boolean movingRight = (moveRight || kRight || padRight) && playerStunTimer <= 0 && !isPaused && !storyDialogueActive && !shopFreezesWorld();
@@ -9413,11 +10027,13 @@ public class GameScreen implements Screen {
         if (swingCooldown > 0) swingCooldown -= delta;
 
         boolean nearCannon = pos.dst(cannonPos) < 1.6f;
-        btnShootCannon.setVisible(nearCannon && imperialAlive && playerStunTimer <= 0 && currentGameMode != GameMode.PVP && currentGameMode != GameMode.BATTLE_5V5);
+        btnShootCannon.setVisible(nearCannon && imperialAlive && !playerDead && !isMatchEnded && !isPaused && !inCutscene()
+            && playerStunTimer <= 0 && currentGameMode != GameMode.PVP && currentGameMode != GameMode.BATTLE_5V5);
 
         if (hasSage) {
             boolean nearSage = pos.dst(sageX, sageY) < 2.0f;
-            btnRevivePartner.setVisible(nearSage && remoteHp <= 0 && currentGameMode == GameMode.COOP);
+            btnRevivePartner.setVisible(nearSage && remoteHp <= 0 && !partnerLeft && reviveCooldownTimer <= 0f
+                && !playerDead && !isMatchEnded && !isPaused && currentGameMode == GameMode.COOP);
         }
 
         // Item respawn (15s cycle)
@@ -9428,32 +10044,34 @@ public class GameScreen implements Screen {
             for (int i = 0; i < weaponPickupActives.size; i++) weaponPickupActives.set(i, true);
         }
 
-        // HP pickup
-        int currentHpRestore = 35 + (int)(totalMatchTime / 20f) * 10;
-        for (int i = 0; i < hpPickupPositions.size; i++) {
-            if (hpPickupActives.get(i) && pos.dst(hpPickupPositions.get(i)) <= 0.85f && playerHp < playerMaxHp) {
-                playerHp = Math.min(playerMaxHp, playerHp + currentHpRestore);
-                playerHpBar.setHp(playerHp);
-                lblPlayerHp.setText("Máu: " + playerHp + " HP");
-                addDamageText(pos.x, pos.y + 0.4f, currentHpRestore, Color.GREEN);
-                hpPickupActives.set(i, false);
-                SoundManager.getInstance().playCoin();
-                actionLog.setText("Nhặt cục máu! Hồi +" + currentHpRestore + " HP");
-            }
-        }
-
-        // Weapon pickup — luôn đổi sang vũ khí khác vũ khí đang cầm và cộng thêm sát thương
-        for (int i = 0; i < weaponPickupPositions.size; i++) {
-            if (weaponPickupActives.get(i) && pos.dst(weaponPickupPositions.get(i)) <= 0.85f) {
-                WeaponType[] allWeapons = WeaponType.values();
-                WeaponType picked = allWeapons[MathUtils.random(0, allWeapons.length - 1)];
-                if (picked == currentWeapon) {
-                    picked = allWeapons[(picked.ordinal() + 1) % allWeapons.length];
+        // HP & Weapon pickups (không cho xác chết nhặt vật phẩm)
+        if (!playerDead && !isMatchEnded && !inCutscene()) {
+            int currentHpRestore = 35 + (int)(totalMatchTime / 20f) * 10;
+            for (int i = 0; i < hpPickupPositions.size; i++) {
+                if (hpPickupActives.get(i) && pos.dst(hpPickupPositions.get(i)) <= 0.85f && playerHp < playerMaxHp) {
+                    playerHp = Math.min(playerMaxHp, playerHp + currentHpRestore);
+                    playerHpBar.setHp(playerHp);
+                    lblPlayerHp.setText("Máu: " + playerHp + " HP");
+                    addDamageText(pos.x, pos.y + 0.4f, currentHpRestore, Color.GREEN);
+                    hpPickupActives.set(i, false);
+                    SoundManager.getInstance().playCoin();
+                    actionLog.setText("Nhặt cục máu! Hồi +" + currentHpRestore + " HP");
                 }
-                swordDamageBonus = Math.min(80, swordDamageBonus + 8);
-                weaponPickupActives.set(i, false);
-                equipWeapon(picked, true);
-                SoundManager.getInstance().playCoin();
+            }
+
+            // Weapon pickup — luôn đổi sang vũ khí khác vũ khí đang cầm và cộng thêm sát thương (không hạ bonus đã nâng cấp ở Tiệm Đồ)
+            for (int i = 0; i < weaponPickupPositions.size; i++) {
+                if (weaponPickupActives.get(i) && pos.dst(weaponPickupPositions.get(i)) <= 0.85f) {
+                    WeaponType[] allWeapons = WeaponType.values();
+                    WeaponType picked = allWeapons[MathUtils.random(0, allWeapons.length - 1)];
+                    if (picked == currentWeapon) {
+                        picked = allWeapons[(picked.ordinal() + 1) % allWeapons.length];
+                    }
+                    if (swordDamageBonus < 80) swordDamageBonus = Math.min(80, swordDamageBonus + 8);
+                    weaponPickupActives.set(i, false);
+                    equipWeapon(picked, true);
+                    SoundManager.getInstance().playCoin();
+                }
             }
         }
 
@@ -9486,7 +10104,10 @@ public class GameScreen implements Screen {
         // Lock-On Enemy Target Detection for High-Altitude Eagle Strike
         lockOnEnemy = null;
         lockOnFighter = null;
-        if (!playerDead && !isMatchEnded && !isEagleStriking && (pos.y >= 2.8f || isClimbing || isPlayerOnTowerSummit())) {
+        lockOnIsPrimaryRemote = false;
+        lockOnPeerId = null;
+        if (!playerDead && !isMatchEnded && !isEagleStriking && !inCutscene() && !isPaused
+            && (pos.y >= 2.8f || isClimbing || isPlayerOnTowerSummit())) {
             float closestDist = 9.5f;
             for (int mi = 0; mi < activeMonsters.size; mi++) {
                 GroundMob m = activeMonsters.get(mi);
@@ -9498,17 +10119,44 @@ public class GameScreen implements Screen {
                     }
                 }
             }
-            // 5v5: cho phép Ứng Kích lên bot phe địch (trước đây chỉ khóa được quái -> nút không bao giờ hiện)
+            // 5v5: cho phép Ứng Kích lên cả người chơi đối thủ lẫn bot phe địch
             if (currentGameMode == GameMode.BATTLE_5V5) {
                 int pTeam = (game != null) ? game.selectedTeam : 1;
+                if (remoteX != -999f && !remoteDead && remoteTeam != pTeam && !remoteStealth
+                    && isRemoteVisibleIn5v5(remoteX, remoteY, remoteTeam, remoteInBush) && remoteY < pos.y + 1.0f) {
+                    float dist = pos.dst(remoteX, remoteY);
+                    if (dist < closestDist) {
+                        closestDist = dist;
+                        lockOnIsPrimaryRemote = true;
+                        lockOnPeerId = null;
+                        lockOnFighter = null;
+                        lockOnEnemy = null;
+                    }
+                }
+                for (int epi = 0; epi < extraPeers5v5.size; epi++) {
+                    RemotePeer5v5 ep = extraPeers5v5.get(epi);
+                    if (ep.team != pTeam && !ep.dead && ep.x != -999f && !ep.stealth
+                        && isRemoteVisibleIn5v5(ep.x, ep.y, ep.team, ep.inBush) && ep.y < pos.y + 1.0f) {
+                        float dist = pos.dst(ep.x, ep.y);
+                        if (dist < closestDist) {
+                            closestDist = dist;
+                            lockOnIsPrimaryRemote = false;
+                            lockOnPeerId = ep.id;
+                            lockOnFighter = null;
+                            lockOnEnemy = null;
+                        }
+                    }
+                }
                 for (int fi = 0; fi < fighters5v5.size; fi++) {
                     Fighter5v5 f = fighters5v5.get(fi);
-                    if (f.team != pTeam && !f.isDead && f.body != null && !(f.isInBush && !playerInBush)
+                    if (f.team != pTeam && !f.isDead && f.body != null && !f.isStealth && !(f.isInBush && !playerInBush)
                         && f.body.getPosition().y < pos.y + 1.0f) {
                         float dist = pos.dst(f.body.getPosition());
                         if (dist < closestDist) {
                             closestDist = dist;
                             lockOnFighter = f;
+                            lockOnIsPrimaryRemote = false;
+                            lockOnPeerId = null;
                             lockOnEnemy = null;
                         }
                     }
@@ -9517,19 +10165,29 @@ public class GameScreen implements Screen {
         }
 
         // Eagle Strike button visibility
-        boolean canEagleStrike = (lockOnEnemy != null || lockOnFighter != null || currentGameMode == GameMode.PVP || isPlayerOnTowerSummit())
-            && !playerDead && !isMatchEnded && !isGrabbedByPirate && playerStunTimer <= 0;
+        boolean canEagleStrike = (lockOnEnemy != null || lockOnFighter != null || lockOnIsPrimaryRemote || lockOnPeerId != null
+            || (currentGameMode == GameMode.PVP && pos.y >= 2.8f) || isPlayerOnTowerSummit())
+            && !playerDead && !isMatchEnded && !inCutscene() && !isPaused && !isGrabbedByPirate && playerStunTimer <= 0;
         btnEagleStrike.setVisible(canEagleStrike);
 
         if (isEagleStriking) {
             eagleStrikeTimeout += delta;
             float targetX, targetY;
-            if (currentGameMode == GameMode.PVP) {
+            if (currentGameMode == GameMode.PVP && remoteX != -999f && !remoteDead) {
                 targetX = remoteX; targetY = remoteY;
             } else if (eagleTargetMob != null && eagleTargetMob.body != null && !eagleTargetMob.isDead) {
                 targetX = eagleTargetMob.body.getPosition().x; targetY = eagleTargetMob.body.getPosition().y;
             } else if (eagleTargetFighter != null && eagleTargetFighter.body != null && !eagleTargetFighter.isDead) {
                 targetX = eagleTargetFighter.body.getPosition().x; targetY = eagleTargetFighter.body.getPosition().y;
+            } else if (eagleTargetIsPrimaryRemote && remoteX != -999f && !remoteDead) {
+                targetX = remoteX; targetY = remoteY;
+            } else if (eagleTargetPeerId != null) {
+                RemotePeer5v5 ep = findExtraPeer(eagleTargetPeerId);
+                if (ep != null && !ep.dead && ep.x != -999f) {
+                    targetX = ep.x; targetY = ep.y;
+                } else {
+                    targetX = pos.x + playerFacing * 1.5f; targetY = 0.65f;
+                }
             } else {
                 targetX = pos.x + playerFacing * 1.5f; targetY = 0.65f; // mục tiêu đã chết -> lao thẳng xuống đất
             }
@@ -9555,6 +10213,13 @@ public class GameScreen implements Screen {
                 }
                 if (!nearEnemy && currentGameMode == GameMode.BATTLE_5V5) {
                     int pTeam = (game != null) ? game.selectedTeam : 1;
+                    if (remoteX != -999f && !remoteDead && remoteTeam != pTeam && pos.dst(remoteX, remoteY) < 1.6f) {
+                        nearEnemy = true;
+                    }
+                    for (int epi = 0; epi < extraPeers5v5.size && !nearEnemy; epi++) {
+                        RemotePeer5v5 ep = extraPeers5v5.get(epi);
+                        nearEnemy = ep.team != pTeam && !ep.dead && ep.x != -999f && pos.dst(ep.x, ep.y) < 1.6f;
+                    }
                     for (int i = 0; i < fighters5v5.size && !nearEnemy; i++) {
                         Fighter5v5 f = fighters5v5.get(i);
                         nearEnemy = f.team != pTeam && !f.isDead && f.body != null && pos.dst(f.body.getPosition()) < 1.6f;
@@ -9662,263 +10327,250 @@ public class GameScreen implements Screen {
         updateSkills(delta);
 
         // Projectile update — hỗ trợ tên khóa mục tiêu tự dẫn đường, kiếm khí xuyên thấu, tẩm độc & hút máu
-        for (int i = projectiles.size - 1; i >= 0; i--) {
-            Projectile p = projectiles.get(i);
-            if (p.homingArrow && resolveProjectileTargetPos(p, tmpVec)) {
-                float dxH = tmpVec.x - p.x;
-                float dyH = tmpVec.y - p.y;
-                float distH = (float) Math.sqrt(dxH * dxH + dyH * dyH);
-                float spd = Math.max(15.5f, (float) Math.sqrt(p.vx * p.vx + p.vy * p.vy));
-                if (distH <= Math.max(0.42f, spd * delta * 1.25f)) {
-                    p.x = tmpVec.x;
-                    p.y = tmpVec.y;
+        if (!inCutscene()) {
+            for (int i = projectiles.size - 1; i >= 0; i--) {
+                Projectile p = projectiles.get(i);
+                if (p.homingArrow && resolveProjectileTargetPos(p, tmpVec)) {
+                    float dxH = tmpVec.x - p.x;
+                    float dyH = tmpVec.y - p.y;
+                    float distH = (float) Math.sqrt(dxH * dxH + dyH * dyH);
+                    float spd = Math.max(15.5f, (float) Math.sqrt(p.vx * p.vx + p.vy * p.vy));
+                    if (distH <= Math.max(0.42f, spd * delta * 1.25f)) {
+                        p.x = tmpVec.x;
+                        p.y = tmpVec.y;
+                    } else {
+                        p.vx = (dxH / distH) * spd;
+                        p.vy = (dyH / distH) * spd;
+                        p.x += p.vx * delta;
+                        p.y += p.vy * delta;
+                    }
                 } else {
-                    p.vx = (dxH / distH) * spd;
-                    p.vy = (dyH / distH) * spd;
                     p.x += p.vx * delta;
                     p.y += p.vy * delta;
                 }
-            } else {
-                p.x += p.vx * delta;
-                p.y += p.vy * delta;
-            }
-            p.lifeTime -= delta;
+                p.lifeTime -= delta;
 
-            boolean hit = false;
+                boolean hit = false;
 
-            // Platform collision (bỏ qua bục gỗ cho tên khóa mục tiêu & kiếm khí xuyên thấu để không bị cản đường)
-            if (!p.homingArrow && !p.piercing) {
-                for (int pli = 0; pli < platformsList.size; pli++) {
-                    MapPlatform plat = platformsList.get(pli);
-                    if (p.x >= plat.x && p.x <= plat.x + plat.width
-                        && p.y >= plat.y && p.y <= plat.y + plat.height - 0.15f) {
-                        hit = true; break;
+                // Platform collision (bỏ qua bục gỗ cho tên khóa mục tiêu & kiếm khí xuyên thấu để không bị cản đường)
+                if (!p.homingArrow && !p.piercing) {
+                    for (int pli = 0; pli < platformsList.size; pli++) {
+                        MapPlatform plat = platformsList.get(pli);
+                        if (p.x >= plat.x && p.x <= plat.x + plat.width
+                            && p.y >= plat.y && p.y <= plat.y + plat.height - 0.15f) {
+                            hit = true; break;
+                        }
                     }
                 }
-            }
 
-            if (!hit && p.isCannonBall && imperialAlive
-                && Math.abs(p.x - imperialX) < 1.4f && Math.abs(p.y - imperialY) < 1.4f) {
-                imperialAlive = false;
-                imperialState = "FALLING";
-                imperialDeathTimer = 1.2f;
-                score += 500; goldEarned += 150;
-                updateScoreGoldUI();
-                actionLog.setText("PHÁO BẮN HẠ LÍNH BAY TRIỀU ĐÌNH!");
-                addDamageText(imperialX, imperialY + 0.5f, 999, Color.GOLD);
-                SoundManager.getInstance().playBossSmash();
-                cameraShakeTime = 0.5f; cameraShakeIntensity = 0.35f;
-                hit = true;
-            } else if (!hit && !p.isCannonBall) {
-                if (p.fromRemotePeer) {
-                    int pTeam = (game != null) ? game.selectedTeam : 1;
-                    boolean isHostile = (currentGameMode == GameMode.PVP) || (currentGameMode == GameMode.BATTLE_5V5 && p.ownerTeam != pTeam);
-                    if (isHostile && !playerDead && playerBody != null) {
-                        Vector2 pPos = playerBody.getPosition();
-                        if (Math.abs(p.x - pPos.x) < 0.68f && Math.abs(p.y - (pPos.y + 0.20f)) < 0.85f) {
-                            if (!p.piercing || p.hitIds.add(9999)) {
+                if (!hit && p.isCannonBall && imperialAlive
+                    && Math.abs(p.x - imperialX) < 1.4f && Math.abs(p.y - imperialY) < 1.4f) {
+                    imperialAlive = false;
+                    imperialState = "FALLING";
+                    imperialDeathTimer = 1.2f;
+                    score += 500; goldEarned += 150;
+                    updateScoreGoldUI();
+                    actionLog.setText("PHÁO BẮN HẠ LÍNH BAY TRIỀU ĐÌNH!");
+                    addDamageText(imperialX, imperialY + 0.5f, 999, Color.GOLD);
+                    SoundManager.getInstance().playBossSmash();
+                    cameraShakeTime = 0.5f; cameraShakeIntensity = 0.35f;
+                    hit = true;
+                } else if (!hit && !p.isCannonBall) {
+                    if (p.fromRemotePeer) {
+                        // Đạn hiển thị từ người chơi khác: chỉ tạo hiệu ứng va chạm (sát thương thật do chủ chiêu gửi qua gói "hit" / "mobHit")
+                        int pTeam = (game != null) ? game.selectedTeam : 1;
+                        boolean isHostile = (currentGameMode == GameMode.PVP) || (currentGameMode == GameMode.BATTLE_5V5 && p.ownerTeam != pTeam);
+                        if (isHostile && !playerDead && playerBody != null) {
+                            Vector2 pPos = playerBody.getPosition();
+                            if (Math.abs(p.x - pPos.x) < 0.68f && Math.abs(p.y - (pPos.y + 0.20f)) < 0.85f) {
+                                if (!p.piercing || p.hitIds.add(9999)) {
+                                    spawnHitSparks(pPos.x, pPos.y + 0.3f, 10, p.applyPoison ? Color.PURPLE : Color.CYAN);
+                                    if (!p.piercing) hit = true;
+                                }
+                            }
+                        }
+                        if (!hit && currentGameMode == GameMode.COOP) {
+                            for (int j = activeMonsters.size - 1; j >= 0; j--) {
+                                GroundMob m = activeMonsters.get(j);
+                                if (m.body != null && !m.isDead) {
+                                    Vector2 mp = m.body.getPosition();
+                                    float hitX = m.isBoss ? 0.82f : 0.65f;
+                                    float hitY = m.isBoss ? 0.98f : 0.78f;
+                                    if (Math.abs(p.x - mp.x) < hitX && Math.abs(p.y - (mp.y + 0.18f)) < hitY) {
+                                        if (p.piercing && !p.hitIds.add(System.identityHashCode(m))) continue;
+                                        spawnHitSparks(mp.x, mp.y + 0.28f, 10, p.applyPoison ? Color.PURPLE : Color.CYAN);
+                                        if (!p.piercing) { hit = true; break; }
+                                    }
+                                }
+                            }
+                        }
+                    } else if (currentGameMode == GameMode.PVP) {
+                        if (remoteX != -999f && !remoteDead
+                            && Math.abs(p.x - remoteX) < 0.65f && Math.abs(p.y - (remoteY + 0.20f)) < 0.82f) {
+                            if (!p.piercing || p.hitIds.add(-103)) {
+                                sendActionPacketFull("hit", p.damage, 0, primaryRemoteId, false, p.applyPoison);
+                                if (p.lifeSteal > 0) healPlayer(p.lifeSteal);
+                                spawnHitSparks(remoteX, remoteY + 0.25f, 10, p.applyPoison ? Color.MAGENTA : Color.CYAN);
+                                if (!p.piercing) hit = true;
+                            }
+                        }
+                    } else if (currentGameMode == GameMode.BATTLE_5V5) {
+                        int pTeam = (game != null) ? game.selectedTeam : 1;
+                        float titanMult = playerHasTitanBuff ? 1.35f : 1.0f;
+                        int pDmg = (int)(p.damage * playerDamageBuff * titanMult);
+
+                        if (remoteX != -999f && !remoteDead && remoteTeam != pTeam) {
+                            if (Math.abs(p.x - remoteX) < 0.65f && Math.abs(p.y - (remoteY + 0.20f)) < 0.82f) {
+                                if (!p.piercing || p.hitIds.add(-103)) {
+                                    sendActionPacketFull("hit", pDmg, 0, primaryRemoteId, false, p.applyPoison);
+                                    remoteHitFlashTimer = 0.20f;
+                                    spawnHitSparks(remoteX, remoteY + 0.28f, 12, p.applyPoison ? Color.PURPLE : Color.WHITE);
+                                    addDamageText(remoteX, remoteY + 0.42f, pDmg, Color.RED);
+                                    if (p.lifeSteal > 0) healPlayer(p.lifeSteal);
+                                    if (!p.piercing) hit = true;
+                                }
+                            }
+                        }
+
+                        if (!hit) {
+                            for (int epi = 0; epi < extraPeers5v5.size; epi++) {
+                                RemotePeer5v5 ep = extraPeers5v5.get(epi);
+                                if (ep.team != pTeam && !ep.dead && ep.x != -999f) {
+                                    if (Math.abs(p.x - ep.x) < 0.65f && Math.abs(p.y - (ep.y + 0.20f)) < 0.82f) {
+                                        if (p.piercing && !p.hitIds.add(System.identityHashCode(ep))) continue;
+                                        sendActionPacketFull("hit", pDmg, 0, ep.id, false, p.applyPoison);
+                                        ep.hitFlashTimer = 0.20f;
+                                        spawnHitSparks(ep.x, ep.y + 0.28f, 12, p.applyPoison ? Color.PURPLE : Color.WHITE);
+                                        addDamageText(ep.x, ep.y + 0.42f, pDmg, Color.RED);
+                                        if (p.lifeSteal > 0) healPlayer(p.lifeSteal);
+                                        if (!p.piercing) { hit = true; break; }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (!hit) {
+                            for (int fi = 0; fi < fighters5v5.size; fi++) {
+                                Fighter5v5 f = fighters5v5.get(fi);
+                                if (f.team != pTeam && !f.isDead && f.body != null) {
+                                    Vector2 fPos = f.body.getPosition();
+                                    if (Math.abs(p.x - fPos.x) < 0.65f && Math.abs(p.y - (fPos.y + 0.20f)) < 0.82f) {
+                                        if (p.piercing && !p.hitIds.add(System.identityHashCode(f))) continue;
+                                        boolean killed = f.takeDamage(pDmg);
+                                        if (p.lifeSteal > 0) healPlayer(p.lifeSteal);
+                                        spawnHitSparks(fPos.x, fPos.y + 0.3f, 12, p.applyPoison ? Color.PURPLE : Color.WHITE);
+                                        addDamageText(fPos.x, fPos.y + 0.4f, pDmg, Color.RED);
+                                        if (killed) on5v5Kill((game != null && game.playerName != null ? game.playerName : "Chiến Thần"), pTeam, f.name, f.team);
+                                        if (!p.piercing) { hit = true; break; }
+                                    }
+                                }
+                            }
+                        }
+                        if (!hit && ancientTitan != null && ancientTitan.isAlive) {
+                            if (Math.abs(p.x - ancientTitan.x) < 1.05f && Math.abs(p.y - (ancientTitan.y + 0.6f)) < 1.25f) {
+                                if (!p.piercing || p.hitIds.add(-104)) {
+                                    boolean killed = ancientTitan.takeDamage(pDmg);
+                                    if (p.lifeSteal > 0) healPlayer(p.lifeSteal);
+                                    spawnHitSparks(ancientTitan.x, ancientTitan.y + 0.4f, 15, Color.GOLD);
+                                    addDamageText(ancientTitan.x, ancientTitan.y + 0.6f, pDmg, Color.GOLD);
+                                    if (killed) onTitanSlain(pTeam);
+                                    if (!p.piercing) hit = true;
+                                }
+                            }
+                        }
+                        if (!hit) {
+                            for (int ti = 0; ti < outpostTurrets.size; ti++) {
+                                OutpostTurret turret = outpostTurrets.get(ti);
+                                if (turret.team != pTeam && !turret.isDestroyed) {
+                                    if (Math.abs(p.x - turret.x) < 0.85f && Math.abs(p.y - (turret.y + 0.5f)) < 1.25f) {
+                                        if (p.piercing && !p.hitIds.add(System.identityHashCode(turret))) continue;
+                                        boolean destroyed = turret.takeDamage(pDmg);
+                                        spawnHitSparks(turret.x, turret.y + 0.6f, 15, Color.YELLOW);
+                                        addDamageText(turret.x, turret.y + 0.9f, pDmg, Color.YELLOW);
+                                        if (destroyed) onTurretDestroyed(turret, pTeam);
+                                        if (!p.piercing) { hit = true; break; }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        boolean fromEnemy = !p.isArrow && !p.isSlingshotPellet && !p.isShotgun && !p.isCannonBall && p.skillVisualType == 0;
+                        if (fromEnemy) {
+                            if (Math.abs(p.x - pos.x) < 0.6f && Math.abs(p.y - pos.y) < 0.8f && !playerDead && !bossIntroActive) {
                                 int actualDmg = absorbShield(p.damage);
                                 playerHp = Math.max(0, playerHp - actualDmg);
                                 playerHpBar.setHp(playerHp);
                                 lblPlayerHp.setText("Máu: " + playerHp + " HP");
-                                playerHitFlashTimer = 0.22f;
+                                playerHitFlashTimer = 0.20f;
                                 SoundManager.getInstance().playHurt();
-                                cameraShakeTime = 0.25f;
-                                cameraShakeIntensity = 0.25f;
-                                addDamageText(pPos.x, pPos.y + 0.4f, actualDmg, Color.RED);
-                                actionLog.setText("Trúng đòn kỹ năng của đối thủ! -" + actualDmg + " HP");
-                                if (p.applyPoison) {
-                                    playerSpeedBuff = 0.65f;
-                                    playerRuneTimer = 2.5f;
-                                    addCustomText(pPos.x, pPos.y + 0.7f, "TRÚNG ĐỘC! -35% TỐC CHẠY", Color.PURPLE);
-                                }
-                                spawnHitSparks(pPos.x, pPos.y + 0.3f, 14, p.applyPoison ? Color.PURPLE : Color.CYAN);
-                                if (!p.piercing) hit = true;
-                                if (playerHp <= 0) {
-                                    playerDead = true;
-                                    if (playerBody != null) {
-                                        playerDeathX = playerBody.getPosition().x;
-                                        playerDeathY = playerBody.getPosition().y;
-                                        playerDeathBlinkTimer = 0.85f;
+                                addDamageText(pos.x, pos.y + 0.4f, actualDmg, Color.RED);
+                                if (playerHp <= 0) { playerDead = true; showGameOverDialog(false); }
+                                hit = true;
+                            }
+                        } else {
+                            for (int j = activeMonsters.size - 1; j >= 0; j--) {
+                                GroundMob m = activeMonsters.get(j);
+                                if (m.body != null && !m.isDead) {
+                                    Vector2 mp = m.body.getPosition();
+                                    float hitX = m.isBoss ? 0.82f : 0.65f;
+                                    float hitY = m.isBoss ? 0.98f : 0.78f;
+                                    if (Math.abs(p.x - mp.x) < hitX && Math.abs(p.y - (mp.y + 0.18f)) < hitY) {
+                                        if (p.piercing && !p.hitIds.add(System.identityHashCode(m))) continue;
+                                        if (p.applyPoison) {
+                                            m.poisonTimer = 3.5f;
+                                            m.slowTimer = 2.5f;
+                                        }
+                                        if (p.lifeSteal > 0) healPlayer(p.lifeSteal);
+                                        damageGroundMob(m, p.damage, true);
+                                        spawnHitSparks(mp.x, mp.y + 0.28f, 10,
+                                            p.applyPoison ? Color.PURPLE : (p.homingArrow ? Color.GREEN : Color.CYAN));
+                                        if (!p.piercing) { hit = true; break; }
                                     }
-                                    sendSyncPacket("IDLE");
-                                    if (currentGameMode == GameMode.BATTLE_5V5) {
-                                        playerRespawnTimer5v5 = 5.0f;
-                                    } else {
-                                        showGameOverDialog(false);
+                                }
+                            }
+
+                            if (!hit && hasSkyPirate && pirateAlive) {
+                                if (Math.abs(p.x - pirateX) < 0.88f && Math.abs(p.y - pirateY) < 1.05f) {
+                                    if (!p.piercing || p.hitIds.add(-101)) {
+                                        if (p.lifeSteal > 0) healPlayer(p.lifeSteal);
+                                        damagePirate(p.damage);
+                                        if (!p.piercing) hit = true;
                                     }
                                 }
                             }
-                        }
-                    }
-                    if (!hit && currentGameMode == GameMode.COOP) {
-                        for (int j = activeMonsters.size - 1; j >= 0; j--) {
-                            GroundMob m = activeMonsters.get(j);
-                            if (m.body != null && !m.isDead) {
-                                Vector2 mp = m.body.getPosition();
-                                float hitX = m.isBoss ? 0.82f : 0.65f;
-                                float hitY = m.isBoss ? 0.98f : 0.78f;
-                                if (Math.abs(p.x - mp.x) < hitX && Math.abs(p.y - (mp.y + 0.18f)) < hitY) {
-                                    if (p.piercing && !p.hitIds.add(System.identityHashCode(m))) continue;
-                                    damageGroundMob(m, p.damage, true);
-                                    spawnHitSparks(mp.x, mp.y + 0.28f, 10, p.applyPoison ? Color.PURPLE : Color.CYAN);
-                                    if (!p.piercing) { hit = true; break; }
-                                }
-                            }
-                        }
-                    }
-                } else if (currentGameMode == GameMode.PVP) {
-                    if (Math.abs(p.x - remoteX) < 0.65f && Math.abs(p.y - (remoteY + 0.20f)) < 0.82f) {
-                        if (!p.piercing || p.hitIds.add(-103)) {
-                            sendActionPacket("hit", p.damage, 0);
-                            if (p.lifeSteal > 0) healPlayer(p.lifeSteal);
-                            spawnHitSparks(remoteX, remoteY + 0.25f, 10, p.applyPoison ? Color.MAGENTA : Color.CYAN);
-                            if (!p.piercing) hit = true;
-                        }
-                    }
-                } else if (currentGameMode == GameMode.BATTLE_5V5) {
-                    int pTeam = (game != null) ? game.selectedTeam : 1;
-                    float titanMult = playerHasTitanBuff ? 1.35f : 1.0f;
-                    int pDmg = (int)(p.damage * playerDamageBuff * titanMult);
 
-                    if (remoteX != -999f && !remoteDead && remoteTeam != pTeam) {
-                        if (Math.abs(p.x - remoteX) < 0.65f && Math.abs(p.y - (remoteY + 0.20f)) < 0.82f) {
-                            if (!p.piercing || p.hitIds.add(-103)) {
-                                sendActionPacket("hit", pDmg, 0);
-                                remoteHitFlashTimer = 0.20f;
-                                spawnHitSparks(remoteX, remoteY + 0.28f, 12, p.applyPoison ? Color.PURPLE : Color.WHITE);
-                                addDamageText(remoteX, remoteY + 0.42f, pDmg, Color.RED);
-                                if (p.lifeSteal > 0) healPlayer(p.lifeSteal);
-                                if (!p.piercing) hit = true;
-                            }
-                        }
-                    }
-
-                    if (!hit) {
-                        for (int epi = 0; epi < extraPeers5v5.size; epi++) {
-                            RemotePeer5v5 ep = extraPeers5v5.get(epi);
-                            if (ep.team != pTeam && !ep.dead && ep.x != -999f) {
-                                if (Math.abs(p.x - ep.x) < 0.65f && Math.abs(p.y - (ep.y + 0.20f)) < 0.82f) {
-                                    if (p.piercing && !p.hitIds.add(System.identityHashCode(ep))) continue;
-                                    sendActionPacketToPeer("hit", pDmg, 0, ep.id);
-                                    ep.hitFlashTimer = 0.20f;
-                                    spawnHitSparks(ep.x, ep.y + 0.28f, 12, p.applyPoison ? Color.PURPLE : Color.WHITE);
-                                    addDamageText(ep.x, ep.y + 0.42f, pDmg, Color.RED);
-                                    if (p.lifeSteal > 0) healPlayer(p.lifeSteal);
-                                    if (!p.piercing) { hit = true; break; }
-                                }
-                            }
-                        }
-                    }
-
-                    if (!hit) {
-                        for (int fi = 0; fi < fighters5v5.size; fi++) {
-                            Fighter5v5 f = fighters5v5.get(fi);
-                            if (f.team != pTeam && !f.isDead && f.body != null) {
-                                Vector2 fPos = f.body.getPosition();
-                                if (Math.abs(p.x - fPos.x) < 0.65f && Math.abs(p.y - (fPos.y + 0.20f)) < 0.82f) {
-                                    if (p.piercing && !p.hitIds.add(System.identityHashCode(f))) continue;
-                                    boolean killed = f.takeDamage(pDmg);
-                                    if (p.lifeSteal > 0) healPlayer(p.lifeSteal);
-                                    spawnHitSparks(fPos.x, fPos.y + 0.3f, 12, p.applyPoison ? Color.PURPLE : Color.WHITE);
-                                    addDamageText(fPos.x, fPos.y + 0.4f, pDmg, Color.RED);
-                                    if (killed) on5v5Kill((game != null && game.playerName != null ? game.playerName : "Chiến Thần"), pTeam, f.name, f.team);
-                                    if (!p.piercing) { hit = true; break; }
-                                }
-                            }
-                        }
-                    }
-                    if (!hit && ancientTitan != null && ancientTitan.isAlive) {
-                        if (Math.abs(p.x - ancientTitan.x) < 1.05f && Math.abs(p.y - (ancientTitan.y + 0.6f)) < 1.25f) {
-                            if (!p.piercing || p.hitIds.add(-104)) {
-                                boolean killed = ancientTitan.takeDamage(pDmg);
-                                if (p.lifeSteal > 0) healPlayer(p.lifeSteal);
-                                spawnHitSparks(ancientTitan.x, ancientTitan.y + 0.4f, 15, Color.GOLD);
-                                addDamageText(ancientTitan.x, ancientTitan.y + 0.6f, pDmg, Color.GOLD);
-                                if (killed) onTitanSlain(pTeam);
-                                if (!p.piercing) hit = true;
-                            }
-                        }
-                    }
-                    if (!hit) {
-                        for (int ti = 0; ti < outpostTurrets.size; ti++) {
-                            OutpostTurret turret = outpostTurrets.get(ti);
-                            if (turret.team != pTeam && !turret.isDestroyed) {
-                                if (Math.abs(p.x - turret.x) < 0.85f && Math.abs(p.y - (turret.y + 0.5f)) < 1.25f) {
-                                    if (p.piercing && !p.hitIds.add(System.identityHashCode(turret))) continue;
-                                    boolean destroyed = turret.takeDamage(pDmg);
-                                    spawnHitSparks(turret.x, turret.y + 0.6f, 15, Color.YELLOW);
-                                    addDamageText(turret.x, turret.y + 0.9f, pDmg, Color.YELLOW);
-                                    if (destroyed) onTurretDestroyed(turret, pTeam);
-                                    if (!p.piercing) { hit = true; break; }
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    boolean fromEnemy = !p.isArrow && !p.isSlingshotPellet && !p.isShotgun && !p.isCannonBall && p.skillVisualType == 0;
-                    if (fromEnemy) {
-                        if (Math.abs(p.x - pos.x) < 0.6f && Math.abs(p.y - pos.y) < 0.8f && !playerDead && !bossIntroActive) {
-                            int actualDmg = absorbShield(p.damage);
-                            playerHp = Math.max(0, playerHp - actualDmg);
-                            playerHpBar.setHp(playerHp);
-                            lblPlayerHp.setText("Máu: " + playerHp + " HP");
-                            playerHitFlashTimer = 0.20f;
-                            SoundManager.getInstance().playHurt();
-                            addDamageText(pos.x, pos.y + 0.4f, actualDmg, Color.RED);
-                            if (playerHp <= 0) { playerDead = true; showGameOverDialog(false); }
-                            hit = true;
-                        }
-                    } else {
-                        for (int j = activeMonsters.size - 1; j >= 0; j--) {
-                            GroundMob m = activeMonsters.get(j);
-                            if (m.body != null && !m.isDead) {
-                                Vector2 mp = m.body.getPosition();
-                                float hitX = m.isBoss ? 0.82f : 0.65f;
-                                float hitY = m.isBoss ? 0.98f : 0.78f;
-                                if (Math.abs(p.x - mp.x) < hitX && Math.abs(p.y - (mp.y + 0.18f)) < hitY) {
-                                    if (p.piercing && !p.hitIds.add(System.identityHashCode(m))) continue;
-                                    if (p.applyPoison) {
-                                        m.poisonTimer = 3.5f;
-                                        m.slowTimer = 2.5f;
+                            if (!hit && hasImperial && imperialAlive) {
+                                if (Math.abs(p.x - imperialX) < 0.98f && Math.abs(p.y - imperialY) < 1.15f) {
+                                    if (!p.piercing || p.hitIds.add(-102)) {
+                                        if (p.lifeSteal > 0) healPlayer(p.lifeSteal);
+                                        damageImperial(p.damage);
+                                        if (!p.piercing) hit = true;
                                     }
-                                    if (p.lifeSteal > 0) healPlayer(p.lifeSteal);
-                                    damageGroundMob(m, p.damage, true);
-                                    spawnHitSparks(mp.x, mp.y + 0.28f, 10,
-                                        p.applyPoison ? Color.PURPLE : (p.homingArrow ? Color.GREEN : Color.CYAN));
-                                    if (!p.piercing) { hit = true; break; }
-                                }
-                            }
-                        }
-
-                        if (!hit && hasSkyPirate && pirateAlive) {
-                            if (Math.abs(p.x - pirateX) < 0.88f && Math.abs(p.y - pirateY) < 1.05f) {
-                                if (!p.piercing || p.hitIds.add(-101)) {
-                                    if (p.lifeSteal > 0) healPlayer(p.lifeSteal);
-                                    damagePirate(p.damage);
-                                    if (!p.piercing) hit = true;
-                                }
-                            }
-                        }
-
-                        if (!hit && hasImperial && imperialAlive) {
-                            if (Math.abs(p.x - imperialX) < 0.98f && Math.abs(p.y - imperialY) < 1.15f) {
-                                if (!p.piercing || p.hitIds.add(-102)) {
-                                    if (p.lifeSteal > 0) healPlayer(p.lifeSteal);
-                                    damageImperial(p.damage);
-                                    if (!p.piercing) hit = true;
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            if (hit || p.lifeTime <= 0 || p.x < 0 || p.x > mapWidth || p.y < 0)
-                projectiles.removeIndex(i);
+                if (hit || p.lifeTime <= 0 || p.x < 0 || p.x > mapWidth || p.y < 0)
+                    projectiles.removeIndex(i);
+            }
         }
 
         // Hoạt ảnh tấn công theo từng vũ khí và combo kiếm
+        if (attackCombo > 0 && (playerDead || isMatchEnded || playerStunTimer > 0 || isPaused || inCutscene())) {
+            attackCombo = 0;
+            attackTime = 0f;
+            queuedAttacks = 0;
+            hitThisAttack = false;
+            if (isAssassinating) {
+                isAssassinating = false;
+                pendingAssassinateMob = null;
+                pendingAssassinateFighter = null;
+                pendingAssassinateRemote = false;
+                pendingAssassinatePeerId = null;
+            }
+        }
         if (attackCombo > 0) {
             float atkSpd = (p1AwakenedTimer > 0f) ? 1.35f : 1.0f;
             attackTime += delta * atkSpd;
@@ -9958,6 +10610,13 @@ public class GameScreen implements Screen {
                             addCustomText(assassinateVictimX, assassinateVictimY + 0.8f, "ÁM SÁT KẾT LIỄU!", Color.GOLD);
                             sendActionPacket("hit", 9999, 1);
                             actionLog.setText("ÁM SÁT ĐIỆN ẢNH ĐỐI THỦ!");
+                        } else if (pendingAssassinatePeerId != null) {
+                            RemotePeer5v5 ep = findExtraPeer(pendingAssassinatePeerId);
+                            if (ep != null && !ep.dead && ep.x != -999f) {
+                                addCustomText(assassinateVictimX, assassinateVictimY + 0.8f, "ÁM SÁT KẾT LIỄU!", Color.GOLD);
+                                sendActionPacketToPeer("hit", 9999, 1, ep.id);
+                                actionLog.setText("ÁM SÁT ĐIỆN ẢNH ĐỐI THỦ!");
+                            }
                         }
                     }
 
@@ -9969,11 +10628,16 @@ public class GameScreen implements Screen {
                         pendingAssassinateMob = null;
                         pendingAssassinateFighter = null;
                         pendingAssassinateRemote = false;
+                        pendingAssassinatePeerId = null;
                     }
                 } else {
                     isAssassinating = false;
                     attackCombo = 0;
                     attackTime = 0f;
+                    pendingAssassinateMob = null;
+                    pendingAssassinateFighter = null;
+                    pendingAssassinateRemote = false;
+                    pendingAssassinatePeerId = null;
                 }
             } else if (currentAnim != null) {
                 if (!hitThisAttack) {
@@ -9989,7 +10653,7 @@ public class GameScreen implements Screen {
                     if (currentGameMode == GameMode.PVP) {
                         float distToTarget = remoteX - pos.x;
                         boolean isFacing = (playerFacing == 1 && distToTarget > 0) || (playerFacing == -1 && distToTarget < 0);
-                        if (Math.abs(distToTarget) <= 1.85f && Math.abs(remoteY - pos.y) < 1.4f && isFacing) {
+                        if (!remoteDead && remoteX != -999f && Math.abs(distToTarget) <= 1.85f && Math.abs(remoteY - pos.y) < 1.4f && isFacing) {
                             if (isP2 && checkP2Backstab(remoteX, remoteFacing)) {
                                 damage = (int)(damage * 1.50f);
                                 healPlayer(80);
@@ -10006,12 +10670,7 @@ public class GameScreen implements Screen {
                     } else if (currentGameMode == GameMode.BATTLE_5V5) {
                         int pTeam = (game != null) ? game.selectedTeam : 1;
                         float titanMult = playerHasTitanBuff ? 1.35f : 1.0f;
-                        float ambushMult = 1.0f;
-                        if (playerAmbushBuff) {
-                            ambushMult = 1.40f;
-                            playerAmbushBuff = false;
-                            addCustomText(pos.x, pos.y + 0.8f, "PHỤC KÍCH! +40%", Color.GOLD);
-                        }
+                        float ambushMult = playerAmbushBuff ? 1.40f : 1.0f;
                         int finalDmg = (int)(damage * playerDamageBuff * titanMult * ambushMult);
                         if (remoteX != -999f && !remoteDead && remoteTeam != pTeam) {
                             float distToRemote = remoteX - pos.x;
@@ -10020,6 +10679,7 @@ public class GameScreen implements Screen {
                                 sendActionPacket("hit", finalDmg, 0);
                                 remoteHitFlashTimer = 0.20f;
                                 hitThisAttack = true;
+                                addP1PassiveStack();
                                 spawnHitSparks(remoteX, remoteY + 0.3f, 15, isP2 ? Color.PURPLE : Color.WHITE);
                                 addDamageText(remoteX, remoteY + 0.5f, finalDmg, Color.RED);
                             }
@@ -10033,6 +10693,7 @@ public class GameScreen implements Screen {
                                     sendActionPacketToPeer("hit", finalDmg, 0, ep.id);
                                     ep.hitFlashTimer = 0.20f;
                                     hitThisAttack = true;
+                                    addP1PassiveStack();
                                     spawnHitSparks(ep.x, ep.y + 0.3f, 15, isP2 ? Color.PURPLE : Color.WHITE);
                                     addDamageText(ep.x, ep.y + 0.5f, finalDmg, Color.RED);
                                 }
@@ -10097,6 +10758,11 @@ public class GameScreen implements Screen {
                                     break;
                                 }
                             }
+                        }
+
+                        if (hitThisAttack && playerAmbushBuff) {
+                            playerAmbushBuff = false;
+                            addCustomText(pos.x, pos.y + 0.8f, "PHỤC KÍCH! +40%", Color.GOLD);
                         }
                     } else {
                         for (int i = activeMonsters.size - 1; i >= 0; i--) {
@@ -10219,33 +10885,51 @@ public class GameScreen implements Screen {
 
                 if (!hitThisDash) {
                     if (currentGameMode == GameMode.PVP) {
-                        if (Math.abs(remoteX - pos.x) < 1.6f && Math.abs(remoteY - pos.y) < 1.0f) {
+                        if (!remoteDead && remoteX != -999f && Math.abs(remoteX - pos.x) < 1.6f && Math.abs(remoteY - pos.y) < 1.0f) {
                             sendActionPacket("hit", DASH_DMG, 0);
                             hitThisDash = true;
                         }
                     } else if (currentGameMode == GameMode.BATTLE_5V5) {
                         int pTeam = (game != null) ? game.selectedTeam : 1;
-                        int finalDmg = (int)(DASH_DMG * playerDamageBuff);
-                        if (remoteX != -999f && !remoteDead && Math.abs(remoteX - pos.x) < 1.6f && Math.abs(remoteY - pos.y) < 1.0f) {
+                        int finalDmg = (int)(DASH_DMG * playerDamageBuff * (playerHasTitanBuff ? 1.35f : 1f));
+                        if (remoteX != -999f && !remoteDead && remoteTeam != pTeam
+                            && Math.abs(remoteX - pos.x) < 1.6f && Math.abs(remoteY - pos.y) < 1.0f) {
                             sendActionPacket("hit", finalDmg, 0);
+                            remoteHitFlashTimer = 0.20f;
+                            addDamageText(remoteX, remoteY + 0.5f, finalDmg, Color.CYAN);
                             hitThisDash = true;
                         }
-                        for (int i = 0; i < fighters5v5.size; i++) {
-                            Fighter5v5 f = fighters5v5.get(i);
-                            if (f.team != pTeam && !f.isDead && f.body != null && Math.abs(f.body.getPosition().x - pos.x) < 1.6f && Math.abs(f.body.getPosition().y - pos.y) < 1.0f) {
-                                boolean killed = f.takeDamage(finalDmg);
-                                spawnHitSparks(f.body.getPosition().x, f.body.getPosition().y + 0.3f, 15, Color.CYAN);
-                                addDamageText(f.body.getPosition().x, f.body.getPosition().y + 0.5f, finalDmg, Color.CYAN);
-                                if (killed) on5v5Kill((game != null && game.playerName != null ? game.playerName : "Chiến Thần"), pTeam, f.name, f.team);
-                                hitThisDash = true;
-                                break;
+                        if (!hitThisDash) {
+                            for (int epi = 0; epi < extraPeers5v5.size; epi++) {
+                                RemotePeer5v5 ep = extraPeers5v5.get(epi);
+                                if (ep.team != pTeam && !ep.dead && ep.x != -999f
+                                    && Math.abs(ep.x - pos.x) < 1.6f && Math.abs(ep.y - pos.y) < 1.0f) {
+                                    sendActionPacketToPeer("hit", finalDmg, 0, ep.id);
+                                    ep.hitFlashTimer = 0.20f;
+                                    addDamageText(ep.x, ep.y + 0.5f, finalDmg, Color.CYAN);
+                                    hitThisDash = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!hitThisDash) {
+                            for (int i = 0; i < fighters5v5.size; i++) {
+                                Fighter5v5 f = fighters5v5.get(i);
+                                if (f.team != pTeam && !f.isDead && f.body != null && Math.abs(f.body.getPosition().x - pos.x) < 1.6f && Math.abs(f.body.getPosition().y - pos.y) < 1.0f) {
+                                    boolean killed = f.takeDamage(finalDmg);
+                                    spawnHitSparks(f.body.getPosition().x, f.body.getPosition().y + 0.3f, 15, Color.CYAN);
+                                    addDamageText(f.body.getPosition().x, f.body.getPosition().y + 0.5f, finalDmg, Color.CYAN);
+                                    if (killed) on5v5Kill((game != null && game.playerName != null ? game.playerName : "Chiến Thần"), pTeam, f.name, f.team);
+                                    hitThisDash = true;
+                                    break;
+                                }
                             }
                         }
                     } else {
                         // FIX: reverse-index
                         for (int i = activeMonsters.size - 1; i >= 0; i--) {
                             GroundMob m = activeMonsters.get(i);
-                            if (m.body != null && Math.abs(m.body.getPosition().x - pos.x) < 1.6f
+                            if (m.body != null && !m.isDead && Math.abs(m.body.getPosition().x - pos.x) < 1.6f
                                 && Math.abs(m.body.getPosition().y - pos.y) < 1.0f) {
                                 damageGroundMob(m, DASH_DMG, true);
                                 hitThisDash = true;
@@ -10259,12 +10943,13 @@ public class GameScreen implements Screen {
             } else {
                 float targetVel = 0;
                 float windSkillMult = (p1WindShieldTimer > 0f) ? 1.35f : 1.0f;
+                float poisonSlowMult = (playerPoisonSlowTimer > 0f) ? 0.65f : 1.0f;
                 float speed = isCrouching ? (PLAYER_SPEED * 0.6f) : (isP2StealthActive ? (PLAYER_SPEED * 1.85f) : PLAYER_SPEED);
-                speed *= playerSpeedBuff * windSkillMult;
+                speed *= playerSpeedBuff * windSkillMult * poisonSlowMult;
                 if (movingLeft) targetVel = -speed;
                 if (movingRight) targetVel = speed;
                 if (!isGrounded && (movingLeft || movingRight)) {
-                    float air = (isP2StealthActive ? AIR_SPEED * 1.6f : AIR_SPEED) * playerSpeedBuff * windSkillMult;
+                    float air = (isP2StealthActive ? AIR_SPEED * 1.6f : AIR_SPEED) * playerSpeedBuff * windSkillMult * poisonSlowMult;
                     targetVel = movingLeft ? -air : air;
                 }
 
@@ -10279,7 +10964,7 @@ public class GameScreen implements Screen {
                     playerBody.setLinearVelocity(targetVel, vel.y);
                 }
 
-                checkLedgeGrab(delta, kUp, padUp, false, movingLeft, movingRight);
+                checkLedgeGrab(delta, kUp, padUp, isPaused || inCutscene(), movingLeft, movingRight);
 
                 if (isGrounded) {
                     coyoteTimer = COYOTE_TIME_MAX;
@@ -10300,7 +10985,8 @@ public class GameScreen implements Screen {
         targetToAssassinate = null;
         targetFighterToAssassinate = null;
         targetRemoteToAssassinate = false;
-        if (!playerDead && !isMatchEnded) {
+        targetAssassinatePeerId = null;
+        if (!playerDead && !isMatchEnded && !isPaused && !inCutscene()) {
             float px = playerBody.getPosition().x;
             float py = playerBody.getPosition().y;
 
@@ -10340,8 +11026,10 @@ public class GameScreen implements Screen {
             // 3. Đối thủ trực tuyến (PVP hoặc khác phe trong 5v5)
             if (targetToAssassinate == null && targetFighterToAssassinate == null && !remoteDead && remoteX != -999f) {
                 int pTeam = (game != null) ? game.selectedTeam : 1;
-                boolean isEnemyRemote = (currentGameMode == GameMode.PVP) || (currentGameMode == GameMode.BATTLE_5V5 && remoteTeam != pTeam);
-                if (isEnemyRemote) {
+                boolean isEnemyRemote = (currentGameMode == GameMode.PVP)
+                    || (currentGameMode == GameMode.BATTLE_5V5 && remoteTeam != pTeam
+                        && isRemoteVisibleIn5v5(remoteX, remoteY, remoteTeam, remoteInBush));
+                if (isEnemyRemote && !remoteStealth) {
                     float dist = Math.abs(remoteX - px);
                     float yDist = Math.abs(remoteY - py);
                     boolean behindRemote = (remoteFacing == 1 && px < remoteX) ||
@@ -10351,10 +11039,28 @@ public class GameScreen implements Screen {
                     }
                 }
             }
+            if (targetToAssassinate == null && targetFighterToAssassinate == null && !targetRemoteToAssassinate
+                && currentGameMode == GameMode.BATTLE_5V5) {
+                int pTeam = (game != null) ? game.selectedTeam : 1;
+                for (int epi = 0; epi < extraPeers5v5.size; epi++) {
+                    RemotePeer5v5 ep = extraPeers5v5.get(epi);
+                    if (ep.team != pTeam && !ep.dead && ep.x != -999f && !ep.stealth
+                        && isRemoteVisibleIn5v5(ep.x, ep.y, ep.team, ep.inBush)) {
+                        float dist = Math.abs(ep.x - px);
+                        float yDist = Math.abs(ep.y - py);
+                        boolean behindEp = (ep.facing == 1 && px < ep.x) || (ep.facing == -1 && px > ep.x);
+                        if (dist < 1.6f && yDist < 1.2f && behindEp) {
+                            targetAssassinatePeerId = ep.id;
+                            break;
+                        }
+                    }
+                }
+            }
         }
-        boolean hasAssassinateTarget = (targetToAssassinate != null || targetFighterToAssassinate != null || targetRemoteToAssassinate);
+        boolean hasAssassinateTarget = (targetToAssassinate != null || targetFighterToAssassinate != null
+            || targetRemoteToAssassinate || targetAssassinatePeerId != null);
         if (btnAssassinate != null) {
-            btnAssassinate.setVisible(hasAssassinateTarget && !isAssassinating);
+            btnAssassinate.setVisible(hasAssassinateTarget && !isAssassinating && !isPaused && !inCutscene());
         }
         if (!chatTyping && !modalConsumed && !isPaused && !isSettingsModalOpen && !isShopOpen && !inCutscene()
             && hasAssassinateTarget && !isAssassinating && (Gdx.input.isKeyJustPressed(Input.Keys.F) || Gdx.input.isKeyJustPressed(Input.Keys.Q))) {
@@ -10390,6 +11096,7 @@ public class GameScreen implements Screen {
             lblPlayerHp.setText("Máu: 0 HP");
             SoundManager.getInstance().playHurt();
             if (currentGameMode == GameMode.BATTLE_5V5) {
+                closeShop();
                 playerRespawnTimer5v5 = 5.0f;
                 int pTeam = (game != null) ? game.selectedTeam : 1;
                 resetTraversalState();
@@ -10406,16 +11113,24 @@ public class GameScreen implements Screen {
             }
         }
 
-        // Bước vật lý cố định 1/60s độc lập FPS (bản cũ gọi step(1/60) MỖI FRAME:
-        // 30 FPS -> game chậm 1/2, màn 144 Hz -> nhanh gấp 2.4 lần). Giới hạn 5 bước/frame tránh "spiral of death".
-        physicsAccumulator += Math.min(delta, 0.25f);
-        int steps = 0;
-        while (physicsAccumulator >= PHYSICS_STEP && steps < 5) {
-            world.step(PHYSICS_STEP, 6, 2);
-            physicsAccumulator -= PHYSICS_STEP;
-            steps++;
+        // Bước vật lý cố định 1/60s độc lập FPS (đóng băng khi đang đọc thoại / mở tiệm đồ chơi đơn).
+        if (!inCutscene()) {
+            physicsAccumulator += Math.min(delta, 0.25f);
+            int steps = 0;
+            while (physicsAccumulator >= PHYSICS_STEP && steps < 5) {
+                world.step(PHYSICS_STEP, 6, 2);
+                physicsAccumulator -= PHYSICS_STEP;
+                steps++;
+            }
+            if (steps == 5) physicsAccumulator = 0f;
+            if (pendingEagleGroundAbort) {
+                pendingEagleGroundAbort = false;
+                if (isEagleStriking) {
+                    boolean hitAny = applyEagleImpactDamage(2.0f);
+                    stopEagleStrike(hitAny);
+                }
+            }
         }
-        if (steps == 5) physicsAccumulator = 0f;
         updateCamera(delta);
 
         // Animation state
@@ -10676,8 +11391,8 @@ public class GameScreen implements Screen {
             }
         }
 
-        // 5V5 Jump Pads (Bệ phóng nảy cao Parkour)
-        if (currentGameMode == GameMode.BATTLE_5V5 && jumpPadTexture != null) {
+        // Jump Pads (Bệ phóng nảy cao Parkour — 5v5 & CO-OP)
+        if (!jumpPads.isEmpty() && jumpPadTexture != null) {
             for (int i = 0; i < jumpPads.size; i++) {
                 JumpPad jp = jumpPads.get(i);
                 if (jp.x + jp.width < camMinX || jp.x - jp.width > camMaxX) continue;
@@ -10685,8 +11400,8 @@ public class GameScreen implements Screen {
             }
         }
 
-        // 5V5 Contested Power-up Runes
-        if (currentGameMode == GameMode.BATTLE_5V5) {
+        // Contested Power-up Runes (5v5 & CO-OP)
+        if (!powerUpRunes.isEmpty()) {
             for (int i = 0; i < powerUpRunes.size; i++) {
                 PowerUpRune rune = powerUpRunes.get(i);
                 if (rune.active) {
@@ -10723,8 +11438,8 @@ public class GameScreen implements Screen {
             batch.setColor(Color.WHITE);
         }
 
-        // 5V5 Tactical Ambush Bushes
-        if (currentGameMode == GameMode.BATTLE_5V5 && bushTexture != null) {
+        // Tactical Ambush Bushes (5v5 & CO-OP)
+        if (!tacticalBushes.isEmpty() && bushTexture != null) {
             for (int i = 0; i < tacticalBushes.size; i++) {
                 TacticalBush bush = tacticalBushes.get(i);
                 if (bush.x + bush.width < camMinX || bush.x > camMaxX) continue;
@@ -11572,12 +12287,21 @@ public class GameScreen implements Screen {
 
         // Tâm ngắm Ứng Kích trên mục tiêu đang khóa
         if (lockOnRegion != null && btnEagleStrike != null && btnEagleStrike.isVisible() && !isEagleStriking) {
-            Vector2 lp = (lockOnEnemy != null && lockOnEnemy.body != null) ? lockOnEnemy.body.getPosition()
-                : ((lockOnFighter != null && lockOnFighter.body != null) ? lockOnFighter.body.getPosition() : null);
-            if (lp != null) {
+            float lpx = Float.NaN, lpy = Float.NaN;
+            if (lockOnEnemy != null && lockOnEnemy.body != null) {
+                lpx = lockOnEnemy.body.getPosition().x; lpy = lockOnEnemy.body.getPosition().y;
+            } else if (lockOnFighter != null && lockOnFighter.body != null) {
+                lpx = lockOnFighter.body.getPosition().x; lpy = lockOnFighter.body.getPosition().y;
+            } else if (lockOnIsPrimaryRemote && remoteX != -999f && !remoteDead) {
+                lpx = remoteX; lpy = remoteY;
+            } else if (lockOnPeerId != null) {
+                RemotePeer5v5 ep = findExtraPeer(lockOnPeerId);
+                if (ep != null && !ep.dead && ep.x != -999f) { lpx = ep.x; lpy = ep.y; }
+            }
+            if (!Float.isNaN(lpx)) {
                 float sz = 0.75f + 0.08f * MathUtils.sin(stateTime * 6f);
                 batch.setColor(1f, 1f, 1f, 0.85f);
-                batch.draw(lockOnRegion, lp.x - sz / 2f, lp.y + 0.15f - sz / 2f, sz / 2f, sz / 2f, sz, sz, 1f, 1f, stateTime * 90f);
+                batch.draw(lockOnRegion, lpx - sz / 2f, lpy + 0.15f - sz / 2f, sz / 2f, sz / 2f, sz, sz, 1f, 1f, stateTime * 90f);
                 batch.setColor(Color.WHITE);
             }
         }
@@ -11762,9 +12486,11 @@ public class GameScreen implements Screen {
             drawTagCentered("[ĐÃ KHÓA]", screenPos.x, screenPos.y, Color.GREEN, 0.95f);
         }
 
-        // Bong bóng thoại Chat trên đầu đồng đội / đối thủ trực tuyến
+        // Bong bóng thoại Chat trên đầu đồng đội / đối thủ trực tuyến (ẩn nếu kẻ địch 5v5 đang núp bụi)
         if (isOnlineMode() && commsManager != null && commsManager.remoteBubbleTimer > 0f
-            && remoteX != -999f && !remoteDead && commsManager.remoteBubbleText != null
+            && remoteX != -999f && !remoteDead
+            && isRemoteVisibleIn5v5(remoteX, remoteY, remoteTeam, remoteInBush)
+            && commsManager.remoteBubbleText != null
             && !commsManager.remoteBubbleText.isEmpty()) {
             worldToUi(remoteX, remoteY + 1.18f);
             BitmapFont chatFont = UiKit.small();
@@ -11917,21 +12643,30 @@ public class GameScreen implements Screen {
             batch.draw(sparkTexture, px - 3.5f, py - 3.5f, 7f, 7f);
         }
 
-        // 5v5 Tactical Objects, Fighters & Contested Runes on MiniMap
+        // Bushes & Power-up Runes on MiniMap (5v5 & CO-OP)
+        for (int bi = 0; bi < tacticalBushes.size; bi++) {
+            TacticalBush b = tacticalBushes.get(bi);
+            float bx = miniX + b.x * scaleX;
+            float by = miniY + b.y * scaleY;
+            batch.setColor(COLOR_MINIMAP_BUSH);
+            batch.draw(pixel, bx, by, Math.max(3f, b.width * scaleX), Math.max(3f, b.height * scaleY));
+        }
+        for (int ri = 0; ri < powerUpRunes.size; ri++) {
+            PowerUpRune r = powerUpRunes.get(ri);
+            if (r.active) {
+                float rx = miniX + r.x * scaleX;
+                float ry = miniY + r.y * scaleY;
+                batch.setColor(r.type.getColor());
+                batch.draw(hpOrbTexture, rx - 2.5f, ry - 2.5f, 5f, 5f);
+            }
+        }
+
+        // 5v5 Turrets, Ancient Titan & Fighters on MiniMap
         if (currentGameMode == GameMode.BATTLE_5V5) {
             int pTeam = (game != null) ? game.selectedTeam : 1;
             Vector2 plPos = (playerBody != null) ? playerBody.getPosition() : null;
 
-            // 1. Bushes on MiniMap
-            for (int bi = 0; bi < tacticalBushes.size; bi++) {
-                TacticalBush b = tacticalBushes.get(bi);
-                float bx = miniX + b.x * scaleX;
-                float by = miniY + b.y * scaleY;
-                batch.setColor(COLOR_MINIMAP_BUSH);
-                batch.draw(pixel, bx, by, Math.max(3f, b.width * scaleX), Math.max(3f, b.height * scaleY));
-            }
-
-            // 2. Turrets on MiniMap
+            // 1. Turrets on MiniMap
             for (int ti = 0; ti < outpostTurrets.size; ti++) {
                 OutpostTurret t = outpostTurrets.get(ti);
                 if (!t.isDestroyed) {
@@ -11942,7 +12677,7 @@ public class GameScreen implements Screen {
                 }
             }
 
-            // 3. Ancient Titan Boss on MiniMap
+            // 2. Ancient Titan Boss on MiniMap
             if (ancientTitan != null && ancientTitan.isAlive) {
                 float tx = miniX + ancientTitan.x * scaleX;
                 float ty = miniY + ancientTitan.y * scaleY;
@@ -11950,7 +12685,7 @@ public class GameScreen implements Screen {
                 batch.draw(runeUltTex, tx - 4f, ty - 4f, 8f, 8f);
             }
 
-            // 4. Fighters on MiniMap
+            // 3. Fighters on MiniMap
             for (int fi = 0; fi < fighters5v5.size; fi++) {
                 Fighter5v5 f = fighters5v5.get(fi);
                 if (f.body != null && !f.isDead) {
@@ -11969,15 +12704,6 @@ public class GameScreen implements Screen {
                     float fy = miniY + f.body.getPosition().y * scaleY;
                     batch.setColor(f.team == 1 ? COLOR_FIGHTER_BLUE : COLOR_FIGHTER_RED);
                     batch.draw(sparkTexture, fx - 2.5f, fy - 2.5f, 5f, 5f);
-                }
-            }
-            for (int ri = 0; ri < powerUpRunes.size; ri++) {
-                PowerUpRune r = powerUpRunes.get(ri);
-                if (r.active) {
-                    float rx = miniX + r.x * scaleX;
-                    float ry = miniY + r.y * scaleY;
-                    batch.setColor(r.type.getColor());
-                    batch.draw(hpOrbTexture, rx - 2.5f, ry - 2.5f, 5f, 5f);
                 }
             }
         }
@@ -12249,6 +12975,18 @@ public class GameScreen implements Screen {
         uiStage.getViewport().update(w, h, true);
     }
     @Override public void show() {
+        isHidden = false;
+        if (uiStage != null) Gdx.input.setInputProcessor(uiStage);
+        setupNetworkListeners();
+        try {
+            NetworkManager nm = NetworkManager.getInstance();
+            if (nm != null) {
+                String pMode = (currentGameMode == GameMode.SOLO) ? "SOLO"
+                    : (currentGameMode == GameMode.COOP ? "COOP"
+                    : (currentGameMode == GameMode.BATTLE_5V5 ? "5V5" : "PVP"));
+                nm.updateMyPresence("IN_GAME", pMode, currentGameMode == GameMode.SOLO ? "" : nm.currentRoomCode);
+            }
+        } catch (Exception ignored) {}
         SoundManager.getInstance().playBattleBgm();
         isFirstCameraFrame = true;
         if (playerBody != null) {
@@ -12260,7 +12998,7 @@ public class GameScreen implements Screen {
             camera.update();
         }
     }
-    /** Xóa mọi trạng thái leo thang, bám tường, bám mép, đu dây, Ứng Kích. Gọi khi nhân vật bị dịch chuyển (hồi sinh, rơi nước...)
+    /** Xóa mọi trạng thái leo thang, bám tường, bám mép, đu dây, Ứng Kích, tuyệt kỹ. Gọi khi nhân vật bị dịch chuyển (hồi sinh, rơi nước...)
      *  - nếu không, trạng thái cũ kéo nhân vật về chỗ cũ (VD đang bám mép thì chết -> hồi sinh xong bị kéo lại mép = "kẹt tường"). */
     private void resetTraversalState() {
         isLedgeGrabbing = false;
@@ -12277,6 +13015,16 @@ public class GameScreen implements Screen {
             isEagleStriking = false;
             eagleStrikePhase = 0;
         }
+        pendingEagleGroundAbort = false;
+        eagleTargetMob = null;
+        eagleTargetFighter = null;
+        eagleTargetIsPrimaryRemote = false;
+        eagleTargetPeerId = null;
+        isP1UltActive = false;
+        isP2StealthActive = false;
+        p2StealthTimer = 0f;
+        isP2DashingAssassinate = false;
+        p1SwordRainRemaining = 0;
         isDashing = false;
         jumpCount = 0;
         if (playerBody != null) {
@@ -12290,16 +13038,23 @@ public class GameScreen implements Screen {
         return Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) || Gdx.input.isKeyJustPressed(Input.Keys.BACK);
     }
 
-    /** Ứng dụng bị đưa xuống nền (nghe điện thoại, chuyển app...): chơi đơn tự mở menu tạm dừng để không chết oan khi quay lại. */
+    /** Ứng dụng bị đưa xuống nền (nghe điện thoại, chuyển app...): nhả thao tác cảm ứng & chơi đơn tự mở menu tạm dừng. */
     @Override public void pause() {
+        if (uiStage != null) uiStage.cancelTouchFocus();
+        isAttackButtonPressed = false;
+        isClimbingHold = false;
         if (isDisposed || isPaused || isMatchEnded || isOnlineMode()) return;
         try { togglePause(); } catch (Exception e) { Gdx.app.error("GameScreen", "Khong tam dung duoc", e); }
     }
     @Override public void resume() {}
     /** Gỡ listener mạng và tắt mic/loa ngay khi rời màn (dispose chạy trễ 1 frame). */
     @Override public void hide() {
+        isHidden = true;
         cleanSocketListeners();
-        if (commsManager != null) commsManager.dispose();
+        if (commsManager != null) {
+            commsManager.dispose();
+            commsManager = null;
+        }
         SoundManager.getInstance().stopBgm();
     }
 
@@ -12338,6 +13093,13 @@ public class GameScreen implements Screen {
                 try { t.dispose(); } catch (Exception ignored) {}
             }
         }
+        for (int i = 0; i < ownedPixmaps.size; i++) {
+            Pixmap pm = ownedPixmaps.get(i);
+            if (pm != null) {
+                try { pm.dispose(); } catch (Exception ignored) {}
+            }
+        }
+        ownedPixmaps.clear();
         p2Afterimages.clear();
     }
 }

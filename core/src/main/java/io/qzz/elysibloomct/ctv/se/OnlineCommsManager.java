@@ -53,6 +53,7 @@ public class OnlineCommsManager {
     private AudioRecorder recorder;
     private AudioDevice player;
     private final ArrayBlockingQueue<short[]> playbackQueue = new ArrayBlockingQueue<>(24);
+    private long lastPermissionRequestMs = 0L;
 
     public Runnable onChatUpdated = null;
 
@@ -75,7 +76,8 @@ public class OnlineCommsManager {
         if (clean.isEmpty()) return false;
         if (clean.length() > 120) clean = clean.substring(0, 120);
 
-        String name = (senderName == null || senderName.trim().isEmpty()) ? "Sát Thủ" : senderName.trim();
+        String name = (senderName == null || senderName.trim().isEmpty()) ? "Sát Thủ" : senderName.replace('\n', ' ').replace('\r', ' ').trim();
+        if (name.length() > 24) name = name.substring(0, 24);
         addEntry(new ChatEntry(name, myTeam, clean, true), false);
 
         NetworkManager nm = NetworkManager.getInstance();
@@ -97,10 +99,14 @@ public class OnlineCommsManager {
     }
 
     public void onIncomingChat(String sender, int team, String text, boolean chatPanelOpen) {
-        if (text == null || text.trim().isEmpty()) return;
-        String cleanSender = (sender == null || sender.trim().isEmpty()) ? "Đồng đạo" : sender.trim();
-        String cleanText = text.trim();
+        if (text == null) return;
+        String cleanText = text.replace('\n', ' ').replace('\r', ' ').trim();
+        if (cleanText.isEmpty()) return;
         if (cleanText.length() > 140) cleanText = cleanText.substring(0, 140);
+
+        String cleanSender = (sender == null) ? "" : sender.replace('\n', ' ').replace('\r', ' ').trim();
+        if (cleanSender.isEmpty()) cleanSender = "Đồng đạo";
+        if (cleanSender.length() > 24) cleanSender = cleanSender.substring(0, 24);
 
         addEntry(new ChatEntry(cleanSender, team, cleanText, false), !chatPanelOpen);
         toastText = cleanSender + ": " + cleanText;
@@ -116,12 +122,12 @@ public class OnlineCommsManager {
         if (onChatUpdated != null) onChatUpdated.run();
     }
 
-    /** Bật/tắt chế độ thu âm rảnh tay. Trả về chuỗi thông báo cho HUD. */
     /** Trình duyệt (bản web) chưa hỗ trợ thu/phát âm thanh trực tiếp: tắt đàm thoại micro, vẫn giữ chat chữ. */
     public static boolean isVoiceSupported() {
         return Gdx.app == null || Gdx.app.getType() != com.badlogic.gdx.Application.ApplicationType.WebGL;
     }
 
+    /** Bật/tắt chế độ thu âm rảnh tay. Trả về chuỗi thông báo cho HUD. */
     public String toggleMic() {
         if (!isVoiceSupported()) {
             micEnabled = false;
@@ -172,7 +178,11 @@ public class OnlineCommsManager {
         if (game != null && game.micPermissionChecker != null) {
             try {
                 if (!game.micPermissionChecker.getAsBoolean()) {
-                    if (game.micPermissionRequester != null) game.micPermissionRequester.run();
+                    long now = System.currentTimeMillis();
+                    if (now - lastPermissionRequestMs >= 3000L) {
+                        lastPermissionRequestMs = now;
+                        if (game.micPermissionRequester != null) game.micPermissionRequester.run();
+                    }
                     return false;
                 }
             } catch (Throwable ignored) {}
@@ -196,17 +206,32 @@ public class OnlineCommsManager {
                 micEnabled = false;
                 pushToTalkHeld = false;
                 localSpeaking = false;
+                toastText = "Không mở được Micro trên thiết bị này!";
+                toastTimer = 4.0f;
                 return;
             }
 
             try {
+                int idleTicks = 0;
                 while (!disposed) {
                     if (!micEnabled && !pushToTalkHeld) {
                         localSpeaking = false;
+                        hangoverChunks = 0;
+                        // Giải phóng phần cứng micro sau ~0.5s tắt mic (tắt đèn báo mic Android & tránh dồn buffer cũ)
+                        if (++idleTicks >= 12) break;
                         try { Thread.sleep(40); } catch (InterruptedException ie) { break; }
                         continue;
                     }
+                    idleTicks = 0;
                     recorder.read(pcmBuf, 0, CHUNK_SAMPLES);
+                    if (disposed || (!micEnabled && !pushToTalkHeld)) continue;
+
+                    if (pushToTalkHeld) {
+                        // Giữ phím bộ đàm (V): truyền thẳng không bị cắt giọng nhỏ bởi ngưỡng VAD
+                        localSpeaking = true;
+                        sendVoicePacket(pcmBuf, ulawBuf);
+                        continue;
+                    }
 
                     long sumSq = 0L;
                     for (int i = 0; i < CHUNK_SAMPLES; i++) {
@@ -214,8 +239,8 @@ public class OnlineCommsManager {
                         sumSq += (long) s * s;
                     }
                     float rms = (float) Math.sqrt((double) sumSq / CHUNK_SAMPLES);
-                    if (rms >= VAD_RMS_THRESHOLD || pushToTalkHeld) {
-                        if (rms >= VAD_RMS_THRESHOLD * 0.65f) hangoverChunks = 3;
+                    if (rms >= VAD_RMS_THRESHOLD) {
+                        hangoverChunks = 3;
                     }
                     if (rms >= VAD_RMS_THRESHOLD || hangoverChunks > 0) {
                         if (rms < VAD_RMS_THRESHOLD) hangoverChunks--;
@@ -229,9 +254,10 @@ public class OnlineCommsManager {
                 Gdx.app.error("OnlineComms", "Loi luong thu am", t);
             } finally {
                 localSpeaking = false;
-                if (recorder != null) {
-                    try { recorder.dispose(); } catch (Throwable ignored) {}
-                    recorder = null;
+                AudioRecorder r = recorder;
+                recorder = null;
+                if (r != null) {
+                    try { r.dispose(); } catch (Throwable ignored) {}
                 }
             }
         }, "AL-VoiceCapture");
@@ -263,7 +289,7 @@ public class OnlineCommsManager {
 
     public void onIncomingVoice(String sender, String base64Ulaw) {
         if (!isVoiceSupported()) return;
-        if (disposed || base64Ulaw == null || base64Ulaw.isEmpty()) return;
+        if (disposed || base64Ulaw == null || base64Ulaw.isEmpty() || base64Ulaw.length() > 4400) return;
         try {
             byte[] ulaw = Base64Coder.decode(base64Ulaw);
             if (ulaw == null || ulaw.length == 0 || ulaw.length > 3200) return;
@@ -275,7 +301,10 @@ public class OnlineCommsManager {
                 playbackQueue.poll(); // Bỏ gói cũ nếu mạng dồn cục để không trễ tiếng
                 playbackQueue.offer(pcm);
             }
-            remoteSpeaker = (sender == null || sender.isEmpty()) ? "Đồng đạo" : sender;
+            String cleanSpeaker = (sender == null) ? "" : sender.replace('\n', ' ').replace('\r', ' ').trim();
+            if (cleanSpeaker.isEmpty()) cleanSpeaker = "Đồng đạo";
+            if (cleanSpeaker.length() > 24) cleanSpeaker = cleanSpeaker.substring(0, 24);
+            remoteSpeaker = cleanSpeaker;
             remoteSpeakTimer = 0.35f;
             ensurePlaybackThread();
         } catch (Throwable ignored) {}
@@ -302,9 +331,10 @@ public class OnlineCommsManager {
             } catch (Throwable t) {
                 Gdx.app.error("OnlineComms", "Loi luong phat voice", t);
             } finally {
-                if (player != null) {
-                    try { player.dispose(); } catch (Throwable ignored) {}
-                    player = null;
+                AudioDevice d = player;
+                player = null;
+                if (d != null) {
+                    try { d.dispose(); } catch (Throwable ignored) {}
                 }
             }
         }, "AL-VoicePlayback");
@@ -336,7 +366,7 @@ public class OnlineCommsManager {
         return (short) (sign != 0 ? -sample : sample);
     }
 
-    public void dispose() {
+    public synchronized void dispose() {
         disposed = true;
         micEnabled = false;
         pushToTalkHeld = false;

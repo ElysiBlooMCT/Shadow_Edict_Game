@@ -44,62 +44,61 @@ public class SoundManager {
         return instance;
     }
 
-    private void initSounds() {
+    private Sound safeLoadSound(String path) {
         try {
-            if (Gdx.files.internal("sounds/slash.wav").exists())
-                sndSlash = Gdx.audio.newSound(Gdx.files.internal("sounds/slash.wav"));
-            if (Gdx.files.internal("sounds/hit.wav").exists())
-                sndHit = Gdx.audio.newSound(Gdx.files.internal("sounds/hit.wav"));
-            if (Gdx.files.internal("sounds/heavy_hit.wav").exists())
-                sndHeavyHit = Gdx.audio.newSound(Gdx.files.internal("sounds/heavy_hit.wav"));
-            if (Gdx.files.internal("sounds/dash.wav").exists())
-                sndDash = Gdx.audio.newSound(Gdx.files.internal("sounds/dash.wav"));
-            if (Gdx.files.internal("sounds/jump.wav").exists())
-                sndJump = Gdx.audio.newSound(Gdx.files.internal("sounds/jump.wav"));
-            if (Gdx.files.internal("sounds/coin.wav").exists())
-                sndCoin = Gdx.audio.newSound(Gdx.files.internal("sounds/coin.wav"));
-            if (Gdx.files.internal("sounds/hurt.wav").exists())
-                sndHurt = Gdx.audio.newSound(Gdx.files.internal("sounds/hurt.wav"));
-            if (Gdx.files.internal("sounds/boss_smash.wav").exists())
-                sndBossSmash = Gdx.audio.newSound(Gdx.files.internal("sounds/boss_smash.wav"));
-
-            // New Ultimate and Parkour SFX
-            if (Gdx.files.internal("sounds/ultimate_p1.wav").exists())
-                sndUltimateP1 = Gdx.audio.newSound(Gdx.files.internal("sounds/ultimate_p1.wav"));
-            String[] trangUltCandidates = new String[] {
-                "sounds/trang_ultimate.mp3", "sounds/trang_ultimate.wav", "sounds/trang_ultimate.ogg",
-                "trang_ultimate.mp3", "trang_ultimate.wav"
-            };
-            for (String file : trangUltCandidates) {
-                if (Gdx.files.internal(file).exists()) {
-                    sndTrangUltimate = Gdx.audio.newSound(Gdx.files.internal(file));
-                    break;
-                }
+            if (Gdx.files.internal(path).exists()) {
+                return Gdx.audio.newSound(Gdx.files.internal(path));
             }
-            if (Gdx.files.internal("sounds/ultimate_p2.wav").exists())
-                sndUltimateP2 = Gdx.audio.newSound(Gdx.files.internal("sounds/ultimate_p2.wav"));
-            if (Gdx.files.internal("sounds/wall_jump.wav").exists())
-                sndWallJump = Gdx.audio.newSound(Gdx.files.internal("sounds/wall_jump.wav"));
-            if (Gdx.files.internal("sounds/orb_pickup.wav").exists())
-                sndOrbPickup = Gdx.audio.newSound(Gdx.files.internal("sounds/orb_pickup.wav"));
+        } catch (Exception e) {
+            Gdx.app.log("SoundManager", "Error loading sound " + path + ": " + e.getMessage());
+        }
+        return null;
+    }
 
-            // Load Menu and Battle Musics
-            reloadMenuBgm();
+    private Sound safeLoadFirstSound(String[] candidates) {
+        for (String file : candidates) {
+            Sound s = safeLoadSound(file);
+            if (s != null) return s;
+        }
+        return null;
+    }
 
-            String[] battleBgmCandidates = new String[] {
-                "sounds/battle_bgm.mp3", "sounds/battle_bgm.ogg", "sounds/battle_bgm.wav",
-                "sounds/bgm.mp3", "sounds/bgm.ogg", "sounds/bgm.wav"
-            };
-            for (String file : battleBgmCandidates) {
+    private void initSounds() {
+        sndSlash = safeLoadSound("sounds/slash.wav");
+        sndHit = safeLoadSound("sounds/hit.wav");
+        sndHeavyHit = safeLoadSound("sounds/heavy_hit.wav");
+        sndDash = safeLoadSound("sounds/dash.wav");
+        sndJump = safeLoadSound("sounds/jump.wav");
+        sndCoin = safeLoadSound("sounds/coin.wav");
+        sndHurt = safeLoadSound("sounds/hurt.wav");
+        sndBossSmash = safeLoadSound("sounds/boss_smash.wav");
+
+        sndUltimateP1 = safeLoadSound("sounds/ultimate_p1.wav");
+        sndTrangUltimate = safeLoadFirstSound(new String[] {
+            "sounds/trang_ultimate.mp3", "sounds/trang_ultimate.wav", "sounds/trang_ultimate.ogg",
+            "trang_ultimate.mp3", "trang_ultimate.wav"
+        });
+        sndUltimateP2 = safeLoadSound("sounds/ultimate_p2.wav");
+        sndWallJump = safeLoadSound("sounds/wall_jump.wav");
+        sndOrbPickup = safeLoadSound("sounds/orb_pickup.wav");
+
+        reloadMenuBgm();
+
+        String[] battleBgmCandidates = new String[] {
+            "sounds/battle_bgm.mp3", "sounds/battle_bgm.ogg", "sounds/battle_bgm.wav",
+            "sounds/bgm.mp3", "sounds/bgm.ogg", "sounds/bgm.wav"
+        };
+        for (String file : battleBgmCandidates) {
+            try {
                 if (Gdx.files.internal(file).exists()) {
                     battleBgm = Gdx.audio.newMusic(Gdx.files.internal(file));
                     battleBgm.setLooping(true);
                     battleBgm.setVolume(musicVolume);
                     break;
                 }
+            } catch (Exception e) {
+                Gdx.app.log("SoundManager", "Error loading battle BGM " + file + ": " + e.getMessage());
             }
-        } catch (Exception e) {
-            Gdx.app.log("SoundManager", "Error loading sound effects: " + e.getMessage());
         }
     }
 
@@ -223,6 +222,7 @@ public class SoundManager {
 
     public void reloadMenuBgm() {
         if (menuBgm != null) {
+            if (currentBgm == menuBgm) currentBgm = null;
             try {
                 menuBgm.stop();
                 menuBgm.dispose();
@@ -280,8 +280,8 @@ public class SoundManager {
             if (currentBgm == targetBgm && currentBgm.isPlaying()) {
                 return;
             }
-            if (currentBgm != null && currentBgm.isPlaying()) {
-                currentBgm.stop();
+            if (currentBgm != null && currentBgm != targetBgm) {
+                try { currentBgm.stop(); } catch (Exception ignored) {}
             }
             currentBgm = targetBgm;
             currentBgm.setLooping(true);

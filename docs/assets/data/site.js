@@ -31,7 +31,6 @@ SITE.release = {
   heroAssets: {
     android: { suffix: "-android.apk", label: "Tải cho Android" },
     windows: { suffix: "-windows-x64.zip", label: "Tải cho Windows" },
-    "mac-arm": { suffix: "-macos-apple-silicon.zip", label: "Tải cho macOS" },
     linux: { suffix: "-linux-x64.zip", label: "Tải cho Linux" },
   },
 };

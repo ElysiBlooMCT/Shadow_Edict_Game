@@ -1,5 +1,6 @@
 package io.qzz.elysibloomct.ctv.se.android;
 
+import android.content.ContentResolver;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -18,8 +19,9 @@ public class AndroidLauncher extends AndroidApplication {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         NetworkManager.socketFactory = JavaGameSocket::create; // kết nối online bằng socket.io bản Java
+        final ContentResolver appResolver = getApplicationContext().getContentResolver();
         DeviceIdentity.androidIdProvider = () ->
-            Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
+            Settings.Secure.getString(appResolver, Settings.Secure.ANDROID_ID);
         AndroidApplicationConfiguration configuration = new AndroidApplicationConfiguration();
         configuration.useImmersiveMode = true;
         Main game = new Main();

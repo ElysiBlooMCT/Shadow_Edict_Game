@@ -31,7 +31,7 @@ public class SwingRope {
 
     public SwingRope(float anchorX, float anchorY, float length) {
         this.anchor.set(anchorX, anchorY);
-        this.length = length;
+        this.length = Math.max(0.1f, length);
     }
 
     public SwingRope(float anchorX, float anchorY) {
@@ -42,6 +42,9 @@ public class SwingRope {
      * Cập nhật chuyển động con lắc dây theo quán tính và trọng lực
      */
     public void update(float delta, boolean inputLeft, boolean inputRight) {
+        float dt = MathUtils.clamp(delta, 0f, 1f / 30f);
+        if (dt <= 0f) return;
+
         // 1. Gia tốc trọng trường khôi phục vị trí cân bằng: alpha = -(g / L) * sin(theta)
         angularAcceleration = -(GRAVITY_ACCEL / length) * MathUtils.sin(angle);
 
@@ -61,12 +64,12 @@ public class SwingRope {
         }
 
         // Tích phân Euler bán ẩn (Semi-implicit Euler integration)
-        angularVelocity += angularAcceleration * delta;
+        angularVelocity += angularAcceleration * dt;
 
         // Giới hạn vận tốc góc tối đa tránh quay tít
         angularVelocity = MathUtils.clamp(angularVelocity, -6.5f, 6.5f);
 
-        angle += angularVelocity * delta;
+        angle += angularVelocity * dt;
 
         // Giới hạn góc dao động an toàn
         if (angle > MAX_ANGLE) {

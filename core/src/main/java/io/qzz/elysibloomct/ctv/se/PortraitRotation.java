@@ -69,7 +69,7 @@ public final class PortraitRotation {
 
     /** Đặt Gdx.graphics / Gdx.input thành bản ngang (lồng nhau được). */
     static void begin() {
-        if (!active) return;
+        if (!isActive() || rotGraphics == null || rotInput == null) return;
         if (swaps++ == 0) {
             Gdx.graphics = rotGraphics;
             Gdx.input = rotInput;
@@ -77,16 +77,16 @@ public final class PortraitRotation {
     }
 
     static void end() {
-        if (!active || swaps == 0) return;
+        if (swaps <= 0) return;
         if (--swaps == 0) {
-            Gdx.graphics = realGraphics;
-            Gdx.input = realInput;
+            if (realGraphics != null) Gdx.graphics = realGraphics;
+            if (realInput != null) Gdx.input = realInput;
         }
     }
 
     /** Đảm bảo bộ xử lý chạm thật luôn đi qua lớp xoay (kể cả khi màn hình đặt processor lúc chưa xoay). */
     static void guardInputProcessor() {
-        if (!active) return;
+        if (!isActive() || realInput == null || rotInput == null) return;
         InputProcessor cur = realInput.getInputProcessor();
         if (!(cur instanceof RotatingProcessor)) {
             rotInput.target = cur;
@@ -102,16 +102,37 @@ public final class PortraitRotation {
     }
 
     private static void ensureFbo() {
+        if (realGraphics == null) {
+            active = false;
+            return;
+        }
         int w = realGraphics.getBackBufferHeight();
         int h = realGraphics.getBackBufferWidth();
-        if (w <= 0 || h <= 0) return;
+        if (w <= 0 || h <= 0) {
+            active = false;
+            return;
+        }
         if (fbo != null && fbo.getWidth() == w && fbo.getHeight() == h) return;
-        if (fbo != null) fbo.dispose();
-        fbo = new FrameBuffer(Pixmap.Format.RGBA8888, w, h, false);
-        fbo.getColorBufferTexture().setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
-        fboRegion = new TextureRegion(fbo.getColorBufferTexture());
-        fboRegion.flip(false, true);
-        if (batch == null) batch = new SpriteBatch();
+        if (fbo != null) {
+            try { fbo.dispose(); } catch (Exception ignored) {}
+            fbo = null;
+            fboRegion = null;
+        }
+        try {
+            fbo = new FrameBuffer(Pixmap.Format.RGBA8888, w, h, false);
+            fbo.getColorBufferTexture().setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
+            fboRegion = new TextureRegion(fbo.getColorBufferTexture());
+            fboRegion.flip(false, true);
+            if (batch == null) batch = new SpriteBatch();
+        } catch (Throwable t) {
+            if (fbo != null) {
+                try { fbo.dispose(); } catch (Exception ignored) {}
+            }
+            fbo = null;
+            fboRegion = null;
+            active = false;
+            Gdx.app.error("PortraitRotation", "Khong tao duoc FrameBuffer", t);
+        }
     }
 
     /** Bắt đầu vẽ khung ngang. */
@@ -139,10 +160,26 @@ public final class PortraitRotation {
     }
 
     public static void dispose() {
-        if (fbo != null) fbo.dispose();
-        if (batch != null) batch.dispose();
+        releaseInputProcessor();
+        if (swaps > 0) {
+            if (realGraphics != null) Gdx.graphics = realGraphics;
+            if (realInput != null) Gdx.input = realInput;
+            swaps = 0;
+        }
+        if (fbo != null) {
+            try { fbo.dispose(); } catch (Exception ignored) {}
+        }
+        if (batch != null) {
+            try { batch.dispose(); } catch (Exception ignored) {}
+        }
         fbo = null;
+        fboRegion = null;
         batch = null;
+        active = false;
+        realGraphics = null;
+        realInput = null;
+        rotGraphics = null;
+        rotInput = null;
     }
 
     // ------------------------------------------------------------------ đổi tọa độ

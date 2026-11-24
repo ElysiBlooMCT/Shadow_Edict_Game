@@ -139,7 +139,7 @@ public class SettingsDialog {
         keyListener = new InputListener() {
             @Override
             public boolean keyDown(InputEvent event, int keycode) {
-                if (closed || root.getStage() == null) return false;
+                if (closed || !UiKit.isTopModal(stage, root)) return false;
                 switch (keycode) {
                     case Input.Keys.ESCAPE:
                     case Input.Keys.BACK:

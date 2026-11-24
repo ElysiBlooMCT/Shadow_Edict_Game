@@ -8,8 +8,10 @@ public final class TextFmt {
 
     /** Một chữ số thập phân, dấu chấm: 2.5 -> "2.5", 3 -> "3.0", -0.04 -> "0.0". */
     public static String oneDecimal(float value) {
+        if (!Float.isFinite(value)) return "0.0";
         long tenths = Math.round((double) value * 10.0);
         if (tenths == 0) return "0.0";
+        if (tenths == Long.MIN_VALUE) return "-922337203685477580.8";
         boolean neg = tenths < 0;
         long abs = Math.abs(tenths);
         return (neg ? "-" : "") + (abs / 10) + "." + (abs % 10);
@@ -17,6 +19,7 @@ public final class TextFmt {
 
     /** Tách hàng nghìn bằng dấu chấm: 1234567 -> "1.234.567". */
     public static String groupThousands(long value) {
+        if (value == Long.MIN_VALUE) return "-9.223.372.036.854.775.808";
         String digits = Long.toString(Math.abs(value));
         StringBuilder sb = new StringBuilder();
         int lead = digits.length() % 3;

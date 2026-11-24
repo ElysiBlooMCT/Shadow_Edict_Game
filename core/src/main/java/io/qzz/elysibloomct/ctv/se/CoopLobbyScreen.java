@@ -8,4 +8,8 @@ public class CoopLobbyScreen extends LobbyScreen {
     public CoopLobbyScreen(Main game) {
         super(game, true);
     }
+
+    public CoopLobbyScreen(Main game, String pendingJoinCode) {
+        super(game, true, pendingJoinCode);
+    }
 }

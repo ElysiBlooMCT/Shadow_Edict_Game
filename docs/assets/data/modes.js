@@ -24,7 +24,7 @@ SITE.modes = {
       imageFull: "img/shots/dai-chien-5v5.jpg",
       caption: "Tung tuyệt kỹ giữa trận 5v5",
       title: "Đại chiến 5v5",
-      text: "Phòng trực tuyến tới 10 người, chia hai phe. Tranh bùa, phục kích trong bụi rậm, hạ tháp tiền đồn. Phe nào đủ mạng hạ gục trước thì thắng.",
+      text: "Phòng trực tuyến tới 10 người, chia hai phe. Tranh bùa, phục kích trong bụi rậm, hạ Thần Thú Bạo Chúa. Phe nào đủ mạng hạ gục trước thì thắng.",
     },
     {
       icon: "✧",

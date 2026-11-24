@@ -20,7 +20,7 @@ SITE.gallery = {
       thumb: "img/shots/thanh-co-s.jpg",
       full: "img/shots/thanh-co.jpg",
       title: "Màn 1 · Thành Cổ",
-      text: "Khói binh ngoại thành: làm quen nhịp chạy nhảy, vượt thùng hàng và bám mép leo lên ban công.",
+      text: "Khởi binh ngoại thành: làm quen nhịp chạy nhảy, vượt thùng hàng và bám mép leo lên ban công.",
     },
     {
       thumb: "img/shots/ben-cang-s.jpg",

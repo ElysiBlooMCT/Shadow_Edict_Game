@@ -14,7 +14,8 @@ public class Projectile {
     public GroundMob targetMob = null;
     public Fighter5v5 targetFighter = null;
     public OutpostTurret targetTurret = null;
-    public int targetSpecial = 0; // 1=Không tặc, 2=Triều đình, 3=Đối thủ PVP, 4=Cổ Thần
+    public String targetPeerId = null; // ID của người chơi trong extraPeers5v5 (5v5 đông người)
+    public int targetSpecial = 0; // 1=Không tặc, 2=Triều đình, 3=Đối thủ PVP/5v5 chính, 4=Cổ Thần, 5=extraPeer5v5
     public int skillVisualType = 0; // 0=thường, 1=Phong Nhẫn, 2=Thiên Kiếm, 3=Huyết Tiêu
     public boolean piercing = false;
     public boolean applyPoison = false;

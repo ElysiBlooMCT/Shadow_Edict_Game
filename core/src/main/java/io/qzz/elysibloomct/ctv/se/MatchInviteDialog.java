@@ -36,6 +36,14 @@ public class MatchInviteDialog {
         return active != null && active.stage == stage && active.root.getStage() != null;
     }
 
+    /** Dọn hộp thoại đang mở (gọi khi thoát game để không giữ tham chiếu tĩnh tới Stage đã dispose). */
+    public static void dismissActive() {
+        if (active != null) {
+            try { active.dismiss(); } catch (Exception ignored) {}
+            active = null;
+        }
+    }
+
     public MatchInviteDialog(Stage stage, Main game, MatchInvite invite) {
         this.stage = stage;
         this.game = game;
@@ -70,14 +78,17 @@ public class MatchInviteDialog {
         final Runnable doAccept = () -> {
             dismiss();
             NetworkManager nm = NetworkManager.getInstance();
-            nm.currentRoomCode = invite.roomCode;
+            String targetCode = invite.roomCode != null ? invite.roomCode.trim() : "";
             nm.currentMatchInvite = null;
+            if (!nm.currentRoomCode.isEmpty() && !nm.currentRoomCode.equals(targetCode)) {
+                nm.leaveRoom();
+            }
             if ("5v5".equalsIgnoreCase(invite.mode)) {
-                game.setScreen(new Arena5v5LobbyScreen(game));
+                game.setScreen(new Arena5v5LobbyScreen(game, targetCode));
             } else if ("coop".equalsIgnoreCase(invite.mode)) {
-                game.setScreen(new CoopLobbyScreen(game));
+                game.setScreen(new CoopLobbyScreen(game, targetCode));
             } else {
-                game.setScreen(new LobbyScreen(game));
+                game.setScreen(new LobbyScreen(game, false, targetCode));
             }
         };
         final Runnable doDecline = () -> {
@@ -91,7 +102,7 @@ public class MatchInviteDialog {
         keyListener = new InputListener() {
             @Override
             public boolean keyDown(InputEvent event, int keycode) {
-                if (root.getStage() == null) return false;
+                if (!UiKit.isTopModal(stage, root)) return false;
                 if (keycode == Input.Keys.ENTER || keycode == Input.Keys.NUMPAD_ENTER || keycode == Input.Keys.Y) {
                     UiKit.consumeModalKey();
                     event.stop();

@@ -215,10 +215,13 @@ public final class GameAssets {
         }
         Texture tex = null;
         if (DOWNSCALE) {
+            ScaledFileTextureData data = null;
             try {
-                tex = new Texture(new ScaledFileTextureData(Gdx.files.internal(path), maxSize));
+                data = new ScaledFileTextureData(Gdx.files.internal(path), maxSize);
+                tex = new Texture(data);
                 loadedCount++;
             } catch (Throwable e) {
+                if (data != null) data.disposePendingPixmap();
                 Gdx.app.error("GameAssets", "Thu nho that bai, dung anh goc: " + path, e);
                 tex = null;
             }
@@ -283,23 +286,39 @@ public final class GameAssets {
         public void prepare() {
             if (prepared) return;
             Pixmap src = new Pixmap(file);
-            int sw = src.getWidth(), sh = src.getHeight();
-            float scale = Math.min(1f, (float) maxSize / Math.max(sw, sh));
-            if (scale >= 0.999f && src.getFormat() == Pixmap.Format.RGBA8888) {
-                pixmap = src;
-            } else {
-                int nw = Math.max(1, Math.round(sw * scale));
-                int nh = Math.max(1, Math.round(sh * scale));
-                Pixmap dst = new Pixmap(nw, nh, Pixmap.Format.RGBA8888);
-                dst.setBlending(Pixmap.Blending.None);
-                dst.setFilter(Pixmap.Filter.BiLinear);
-                dst.drawPixmap(src, 0, 0, sw, sh, 0, 0, nw, nh);
-                src.dispose();
-                pixmap = dst;
+            try {
+                int sw = src.getWidth(), sh = src.getHeight();
+                float scale = Math.min(1f, (float) maxSize / Math.max(sw, sh));
+                if (scale >= 0.999f && src.getFormat() == Pixmap.Format.RGBA8888) {
+                    pixmap = src;
+                } else {
+                    int nw = Math.max(1, Math.round(sw * scale));
+                    int nh = Math.max(1, Math.round(sh * scale));
+                    Pixmap dst = new Pixmap(nw, nh, Pixmap.Format.RGBA8888);
+                    try {
+                        dst.setBlending(Pixmap.Blending.None);
+                        dst.setFilter(Pixmap.Filter.BiLinear);
+                        dst.drawPixmap(src, 0, 0, sw, sh, 0, 0, nw, nh);
+                        pixmap = dst;
+                    } catch (Throwable t) {
+                        dst.dispose();
+                        throw t;
+                    }
+                }
+                width = pixmap.getWidth();
+                height = pixmap.getHeight();
+                prepared = true;
+            } finally {
+                if (pixmap != src) src.dispose();
             }
-            width = pixmap.getWidth();
-            height = pixmap.getHeight();
-            prepared = true;
+        }
+
+        void disposePendingPixmap() {
+            if (pixmap != null) {
+                try { pixmap.dispose(); } catch (Exception ignored) {}
+                pixmap = null;
+            }
+            prepared = false;
         }
 
         @Override

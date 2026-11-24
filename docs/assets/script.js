@@ -240,9 +240,9 @@ const RELEASE = {
 function detectOs() {
     const ua = navigator.userAgent || "";
     if (/Android/i.test(ua)) return "android";
-    if (/iPhone|iPad|iPod/i.test(ua)) return "ios";
+    if (/iPhone|iPad|iPod/i.test(ua) || (/Mac/i.test(ua) && navigator.maxTouchPoints > 1)) return "ios";
     if (/Windows/i.test(ua)) return "windows";
-    if (/Mac/i.test(ua)) return "mac-arm";
+    if (/Mac/i.test(ua)) return "mac";
     if (/Linux/i.test(ua)) return "linux";
     return "";
 }
@@ -289,6 +289,7 @@ function renderDownload(data) {
     if (os === "ios" && data.iosNote) status.textContent = fill(data.iosNote);
     RELEASE.get().then(release => {
         if (!release) {
+            if (os === "ios" && data.iosNote) return;
             status.replaceChildren(document.createTextNode(fill(data.failed || "") + " "));
             const link = el("a", "", data.allVersions || "Releases");
             link.href = RELEASE.page();
@@ -328,7 +329,17 @@ function fillRelease() {
     const conf = SITE_DATA.release || {};
     const os = detectOs();
     RELEASE.get().then(release => {
-        if (!release) return;
+        if (!release) {
+            if (versionNode) {
+                const link = el("a", "", "Xem bản mới nhất");
+                link.href = RELEASE.page();
+                link.target = "_blank";
+                link.rel = "noopener noreferrer";
+                versionNode.replaceChildren(link);
+            }
+            if (dateNode) dateNode.textContent = "—";
+            return;
+        }
         const version = String(release.tag_name || "").replace(/^v/, "");
         if (versionNode) versionNode.textContent = `v${version}`;
         if (dateNode) dateNode.textContent = formatDate(release.published_at);
@@ -344,6 +355,10 @@ function fillRelease() {
 let LIGHTBOX = null;
 
 function openLightbox(items, index) {
+    if (typeof HTMLDialogElement === "undefined" || typeof HTMLDialogElement.prototype.showModal !== "function") {
+        window.open(`${ASSETS}${items[index].src}`, "_blank", "noopener");
+        return;
+    }
     if (!LIGHTBOX) {
         const dialog = el("dialog", "lightbox");
         dialog.setAttribute("aria-label", "Xem ảnh");
@@ -384,6 +399,7 @@ function openLightbox(items, index) {
             if (event.target === dialog) dialog.close();
         });
         dialog.addEventListener("keydown", event => {
+            if (LIGHTBOX.items.length <= 1) return;
             if (event.key === "ArrowLeft") show(-1);
             if (event.key === "ArrowRight") show(1);
         });
@@ -391,7 +407,7 @@ function openLightbox(items, index) {
     LIGHTBOX.items = items;
     LIGHTBOX.index = index;
     LIGHTBOX.show(0);
-    if (typeof LIGHTBOX.dialog.showModal === "function") LIGHTBOX.dialog.showModal(); else window.open(`${ASSETS}${items[index].src}`, "_blank");
+    LIGHTBOX.dialog.showModal();
 }
 
 function renderGallery(data, section) {

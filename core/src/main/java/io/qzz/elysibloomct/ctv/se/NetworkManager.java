@@ -20,6 +20,7 @@ public class NetworkManager {
 
     // Lưu thông tin phòng & nhân vật
     public String currentRoomCode = "";
+    public String currentRoomMode = ""; // "1v1", "coop", "5v5"
     public int myPlayerIndex = 1; // 1: Chủ phòng (P1), 2: Khách (P2)
     public int myCharacter = 1;   // 1: Sát thủ trắng, 2: Sát thủ đen
     public int partnerCharacter = 1; // Nhân vật của đối thủ hoặc đồng đội (1: Trắng, 2: Đen)
@@ -59,7 +60,12 @@ public class NetworkManager {
         void onMatchInviteReceived(MatchInvite invite);
     }
 
+    public interface UserProfileListener {
+        void onUserProfileData(JSONObject data);
+    }
+
     private final List<FriendsUpdateListener> friendsListeners = new ArrayList<>();
+    private final List<UserProfileListener> userProfileListeners = new ArrayList<>();
     private MatchInviteListener matchInviteListener;
 
     public void addFriendsListener(FriendsUpdateListener listener) {
@@ -70,6 +76,16 @@ public class NetworkManager {
 
     public void removeFriendsListener(FriendsUpdateListener listener) {
         friendsListeners.remove(listener);
+    }
+
+    public void addUserProfileListener(UserProfileListener listener) {
+        if (listener != null && !userProfileListeners.contains(listener)) {
+            userProfileListeners.add(listener);
+        }
+    }
+
+    public void removeUserProfileListener(UserProfileListener listener) {
+        userProfileListeners.remove(listener);
     }
 
     public void setMatchInviteListener(MatchInviteListener listener) {
@@ -104,6 +120,22 @@ public class NetworkManager {
         } catch (Exception ignored) {}
     }
 
+    /** Đóng kết nối gọn gàng khi thoát ứng dụng (tránh treo tiến trình Desktop / giữ trạng thái ONLINE ảo). */
+    public void shutdown() {
+        try {
+            leaveRoom();
+        } catch (Exception ignored) {}
+        friendsListeners.clear();
+        userProfileListeners.clear();
+        matchInviteListener = null;
+        currentMatchInvite = null;
+        currentRoomCode = "";
+        currentRoomMode = "";
+        if (socket != null) {
+            try { socket.disconnect(); } catch (Exception ignored) {}
+        }
+    }
+
     /**
      * Báo server rời phòng hiện tại và xóa mã phòng cục bộ.
      * Nếu server chưa xử lý sự kiện "leaveRoom" thì socket.io bỏ qua, không gây lỗi.
@@ -114,6 +146,8 @@ public class NetworkManager {
             try { socket.emit("leaveRoom", code); } catch (Exception ignored) {}
         }
         currentRoomCode = "";
+        currentRoomMode = "";
+        myPlayerIndex = 1;
         updateMyPresence("ONLINE", "", "");
     }
 
@@ -125,18 +159,28 @@ public class NetworkManager {
         if (players == null || players.length() == 0) return;
         String mySocketId = (socket != null && socket.id() != null) ? socket.id() : "";
         int selfIdx = -1;
-        for (int i = 0; i < players.length(); i++) {
-            JSONObject p = players.optJSONObject(i);
-            if (p == null) continue;
-            String pid = p.optString("id", "");
-            String puid = p.optString("userId", "");
-            if (!mySocketId.isEmpty() && mySocketId.equals(pid)) {
-                selfIdx = i;
-                break;
+        // Lượt 1: ưu tiên khớp chính xác socket.id (tránh nhầm slot cũ khi reconnect hoặc mở 2 tab web)
+        if (!mySocketId.isEmpty()) {
+            for (int i = 0; i < players.length(); i++) {
+                JSONObject p = players.optJSONObject(i);
+                if (p == null) continue;
+                String pid = p.isNull("id") ? "" : p.optString("id", "");
+                if (mySocketId.equals(pid)) {
+                    selfIdx = i;
+                    break;
+                }
             }
-            if (localUserId != null && !localUserId.isEmpty() && localUserId.equals(puid)) {
-                selfIdx = i;
-                break;
+        }
+        // Lượt 2: fallback theo userId nếu socket.id chưa khớp
+        if (selfIdx < 0 && localUserId != null && !localUserId.isEmpty()) {
+            for (int i = 0; i < players.length(); i++) {
+                JSONObject p = players.optJSONObject(i);
+                if (p == null) continue;
+                String puid = p.isNull("userId") ? "" : p.optString("userId", "");
+                if (localUserId.equals(puid)) {
+                    selfIdx = i;
+                    break;
+                }
             }
         }
         if (selfIdx < 0 && myPlayerIndex >= 1 && myPlayerIndex <= players.length()) {
@@ -219,6 +263,9 @@ public class NetworkManager {
                         joinData.put("charId", myCharacter);
                         joinData.put("team", myTeam);
                         joinData.put("userId", PlayerProfile.getInstance().userId);
+                        if (currentRoomMode != null && !currentRoomMode.isEmpty()) {
+                            joinData.put("type", currentRoomMode);
+                        }
                         socket.emit("joinRoom", currentRoomCode, joinData);
                         socket.emit("getRoomState");
                     } catch (Exception ignored) {}
@@ -356,9 +403,34 @@ public class NetworkManager {
             }
         }));
 
-        // Kết bạn thành công
-        socket.on("friendRequestAccepted", args -> Gdx.app.postRunnable(this::refreshFriendsList));
+        // Kết bạn thành công (xóa lời mời chờ nếu 2 bên cùng gửi kết bạn)
+        socket.on("friendRequestAccepted", args -> Gdx.app.postRunnable(() -> {
+            try {
+                if (args.length > 0 && args[0] instanceof JSONObject) {
+                    String uid = ((JSONObject) args[0]).optString("userId", "");
+                    if (!uid.isEmpty()) {
+                        pendingFriendRequests.remove(uid);
+                        pendingRequestNames.remove(uid);
+                    }
+                }
+            } catch (Exception ignored) {}
+            refreshFriendsList();
+        }));
         socket.on("friendRemoved", args -> Gdx.app.postRunnable(this::refreshFriendsList));
+
+        // Dữ liệu hồ sơ người chơi (chuyển cho PlayerProfileDialog đang mở)
+        socket.on("userProfileData", args -> Gdx.app.postRunnable(() -> {
+            try {
+                if (args.length > 0 && args[0] instanceof JSONObject) {
+                    JSONObject obj = (JSONObject) args[0];
+                    for (UserProfileListener l : new ArrayList<>(userProfileListeners)) {
+                        l.onUserProfileData(obj);
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }));
 
         // Nhận lời mời vào trận Realtime
         socket.on("matchInviteReceived", args -> Gdx.app.postRunnable(() -> {
@@ -433,6 +505,7 @@ public class NetworkManager {
     public void acceptFriendRequest(String requesterId) {
         if (socket != null && socket.connected() && requesterId != null) {
             pendingFriendRequests.remove(requesterId);
+            pendingRequestNames.remove(requesterId);
             socket.emit("acceptFriendRequest", requesterId);
         }
     }
@@ -440,6 +513,7 @@ public class NetworkManager {
     public void declineFriendRequest(String requesterId) {
         if (socket != null && socket.connected() && requesterId != null) {
             pendingFriendRequests.remove(requesterId);
+            pendingRequestNames.remove(requesterId);
             socket.emit("declineFriendRequest", requesterId);
         }
     }

@@ -4,8 +4,7 @@ import com.badlogic.gdx.Application;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Preferences;
 
-import com.badlogic.gdx.math.MathUtils;
-
+import java.util.Random;
 import java.util.function.Supplier;
 
 /**
@@ -75,10 +74,11 @@ public final class DeviceIdentity {
     /** UUID ngẫu nhiên dạng chuẩn 8-4-4-4-12 (không dùng java.util.UUID để chạy được trên web). */
     static String randomUuid() {
         final String hex = "0123456789abcdef";
+        Random rng = new Random();
         StringBuilder sb = new StringBuilder(36);
         for (int i = 0; i < 32; i++) {
             if (i == 8 || i == 12 || i == 16 || i == 20) sb.append('-');
-            int v = MathUtils.random(15);
+            int v = rng.nextInt(16);
             if (i == 12) v = 4;                    // phiên bản 4
             if (i == 16) v = 8 | (v & 3);          // biến thể RFC 4122
             sb.append(hex.charAt(v));

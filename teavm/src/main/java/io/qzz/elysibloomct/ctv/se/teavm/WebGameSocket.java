@@ -161,7 +161,7 @@ public final class WebGameSocket extends GameSocket {
      * các lệnh on/connect được ghi nhớ và áp dụng ngay khi thư viện nạp xong.
      */
     @JSBody(params = { "url", "lib" }, script = ""
-        + "var w = { sock: null, handlers: {}, wantConnect: false };"
+        + "var w = { sock: null, handlers: {}, wantConnect: false, lib: lib };"
         + "function boot() {"
         + "  if (w.sock || typeof io === 'undefined') return;"
         + "  w.sock = io(url, { transports: ['websocket'], autoConnect: false, reconnection: true,"
@@ -169,20 +169,31 @@ public final class WebGameSocket extends GameSocket {
         + "  for (var ev in w.handlers) { if (w.handlers.hasOwnProperty(ev)) w.sock.on(ev, w.handlers[ev]); }"
         + "  if (w.wantConnect) w.sock.connect();"
         + "}"
-        + "w.boot = boot;"
-        + "if (typeof io !== 'undefined') { boot(); }"
-        + "else {"
+        + "function loadLib() {"
+        + "  if (typeof io !== 'undefined') { boot(); return; }"
         + "  var tag = document.getElementById('se-socketio');"
-        + "  if (!tag) { tag = document.createElement('script'); tag.id = 'se-socketio'; tag.src = lib; document.head.appendChild(tag); }"
+        + "  if (tag) return;"
+        + "  tag = document.createElement('script'); tag.id = 'se-socketio'; tag.src = w.lib;"
         + "  tag.addEventListener('load', boot);"
-        + "  tag.addEventListener('error', function () { console.error('Khong tai duoc thu vien socket.io: ' + lib); });"
+        + "  tag.addEventListener('error', function () {"
+        + "    console.error('Khong tai duoc thu vien socket.io: ' + w.lib);"
+        + "    if (tag.parentNode) tag.parentNode.removeChild(tag);"
+        + "    var errH = w.handlers['connect_error'];"
+        + "    if (errH) errH('Khong tai duoc thu vien socket.io');"
+        + "  });"
+        + "  document.head.appendChild(tag);"
         + "}"
+        + "w.boot = boot;"
+        + "w.loadLib = loadLib;"
+        + "loadLib();"
         + "return w;")
     private static native JSObject create(String url, String lib);
 
     @JSBody(params = { "w", "ev", "cb" }, script = ""
         + "var h = function () {"
-        + "  var a = Array.prototype.slice.call(arguments);"
+        + "  var a = Array.prototype.slice.call(arguments).map(function (x) {"
+        + "    return (x instanceof Error) ? (x.message || String(x)) : x;"
+        + "  });"
         + "  var j; try { j = JSON.stringify(a); } catch (e) { j = '[]'; }"
         + "  cb(j);"
         + "};"
@@ -207,7 +218,7 @@ public final class WebGameSocket extends GameSocket {
     @JSBody(params = { "w" }, script = "return (w.sock && w.sock.id) ? w.sock.id : null;")
     private static native String jsId(JSObject w);
 
-    @JSBody(params = { "w" }, script = "w.wantConnect = true; if (w.sock) w.sock.connect(); else if (typeof io !== 'undefined') w.boot();")
+    @JSBody(params = { "w" }, script = "w.wantConnect = true; if (w.sock) w.sock.connect(); else if (typeof io !== 'undefined') w.boot(); else w.loadLib();")
     private static native void jsConnect(JSObject w);
 
     @JSBody(params = { "w" }, script = "w.wantConnect = false; if (w.sock) w.sock.disconnect();")

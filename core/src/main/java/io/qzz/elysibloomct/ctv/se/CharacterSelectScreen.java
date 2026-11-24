@@ -194,7 +194,7 @@ public class CharacterSelectScreen extends ScreenAdapter {
                 TextButton btnNewGame = new TextButton("CHƠI MỚI (ẢI 1-1)", UiKit.buttonStyle(new Color(0.85f, 0.25f, 0.15f, 1f), UiKit.buttonFont()));
                 btnNewGame.getLabel().setFontScale(0.70f);
                 UiKit.onClick(btnNewGame, () -> {
-                    StorySaveManager.clearSave();
+                    // Chỉ xóa file lưu khi người chơi thực sự bấm BẮT ĐẦU (tránh mất tiến độ nếu bấm Quay lại)
                     game.setScreen(CharacterSelectScreen.forNewStory(game));
                 });
                 actionRow.add(btnNewGame).size(210, 50).padRight(12);
@@ -202,7 +202,7 @@ public class CharacterSelectScreen extends ScreenAdapter {
             btnStart = new TextButton("VÀO ẢI " + selectedLevel + " (Enter)", UiKit.buttonStyle(UiKit.GREEN, UiKit.buttonFont()));
             UiKit.onClick(btnStart, this::startGame);
             btnStart.getLabel().setFontScale(0.78f);
-            actionRow.add(btnStart).size(StorySaveManager.hasSave() ? 210 : 490, 50);
+            actionRow.add(btnStart).size(StorySaveManager.hasSave() ? 240 : 490, 50);
         }
         root.add(actionRow);
         stage.addActor(root);
@@ -358,7 +358,11 @@ public class CharacterSelectScreen extends ScreenAdapter {
                 lblObjective.setText("Mục tiêu: " + d.objectiveText + "   •   [A/D, 1/2] Tướng · [W/S] Ải · [Q/E] Màn");
             }
             if (btnStart != null) {
-                btnStart.setText("BẮT ĐẦU  ·  " + d.shortLabel().toUpperCase() + " (Enter)");
+                boolean hasSave = StorySaveManager.hasSave();
+                btnStart.setText(hasSave
+                    ? ("VÀO " + d.shortLabel().toUpperCase() + " (Enter)")
+                    : ("BẮT ĐẦU  ·  " + d.shortLabel().toUpperCase() + " (Enter)"));
+                UiKit.fitLabel(btnStart, hasSave ? 240f : 490f);
             }
         }
     }
@@ -375,19 +379,25 @@ public class CharacterSelectScreen extends ScreenAdapter {
             NetworkManager.getInstance().myCharacter = "P2".equals(game.selectedCharacter) ? 2 : 1;
         }
         PlayerProfile p = PlayerProfile.getInstance();
-        p.lastCharacter = game.selectedCharacter;
-        p.lastStoryLevel = selectedLevel;
-        p.save();
         SoundManager.getInstance().playHeavyHit();
         game.freePlayMode = customMap > 0;
         if (customMap > 0) {
+            // Chế độ chơi tự do: không ghi đè tiến độ / nhân vật cốt truyện đang lưu
             game.selectedOnlineMap = customMap;
             int lvl = StoryChapterConfig.indexOf(customMap, 1);
             game.setScreen(new GameScreen(game, GameScreen.GameMode.SOLO, lvl));
         } else if (isNewStory) {
+            game.selectedLevel = 1;
+            p.lastCharacter = game.selectedCharacter;
+            p.lastStoryLevel = 1;
+            p.save();
             StorySaveManager.clearSave();
             game.setScreen(new GameScreen(game, GameScreen.GameMode.SOLO, 1));
         } else {
+            game.selectedLevel = selectedLevel;
+            p.lastCharacter = game.selectedCharacter;
+            p.lastStoryLevel = selectedLevel;
+            p.save();
             game.setScreen(new GameScreen(game, GameScreen.GameMode.SOLO, selectedLevel));
         }
     }

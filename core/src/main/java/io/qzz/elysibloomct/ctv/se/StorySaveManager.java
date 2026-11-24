@@ -53,7 +53,7 @@ public class StorySaveManager {
     public static String getSavedCharacter() {
         try {
             Preferences prefs = Gdx.app.getPreferences(PREF_NAME);
-            return prefs.getString("savedCharacter", "P1");
+            return "P2".equals(prefs.getString("savedCharacter", "P1")) ? "P2" : "P1";
         } catch (Exception e) {
             return "P1";
         }
@@ -62,7 +62,7 @@ public class StorySaveManager {
     public static int getSavedHp() {
         try {
             Preferences prefs = Gdx.app.getPreferences(PREF_NAME);
-            return prefs.getInteger("savedHp", 100);
+            return Math.max(25, prefs.getInteger("savedHp", 100));
         } catch (Exception e) {
             return 100;
         }
@@ -71,7 +71,7 @@ public class StorySaveManager {
     public static int getSavedGold() {
         try {
             Preferences prefs = Gdx.app.getPreferences(PREF_NAME);
-            return prefs.getInteger("savedGold", 0);
+            return Math.max(0, prefs.getInteger("savedGold", 0));
         } catch (Exception e) {
             return 0;
         }
@@ -80,7 +80,7 @@ public class StorySaveManager {
     public static int getSavedScore() {
         try {
             Preferences prefs = Gdx.app.getPreferences(PREF_NAME);
-            return prefs.getInteger("savedScore", 0);
+            return Math.max(0, prefs.getInteger("savedScore", 0));
         } catch (Exception e) {
             return 0;
         }
@@ -89,7 +89,7 @@ public class StorySaveManager {
     public static int getSavedPotions() {
         try {
             Preferences prefs = Gdx.app.getPreferences(PREF_NAME);
-            return prefs.getInteger("savedPotions", 1);
+            return Math.max(0, prefs.getInteger("savedPotions", 1));
         } catch (Exception e) {
             return 1;
         }
@@ -98,9 +98,10 @@ public class StorySaveManager {
     public static float getSavedCheckpointX() {
         try {
             Preferences prefs = Gdx.app.getPreferences(PREF_NAME);
-            return prefs.getFloat("savedCheckpointX", 10.0f);
+            float x = prefs.getFloat("savedCheckpointX", 3.0f);
+            return (Float.isFinite(x) && x >= 0f) ? x : 3.0f;
         } catch (Exception e) {
-            return 10.0f;
+            return 3.0f;
         }
     }
 
@@ -137,7 +138,7 @@ public class StorySaveManager {
             prefs.putInteger("savedGold", Math.max(0, gold));
             prefs.putInteger("savedScore", Math.max(0, score));
             prefs.putInteger("savedPotions", Math.max(0, potions));
-            prefs.putFloat("savedCheckpointX", checkpointX);
+            prefs.putFloat("savedCheckpointX", (Float.isFinite(checkpointX) && checkpointX >= 0f) ? checkpointX : 3.0f);
             prefs.flush();
         } catch (Exception e) {
             e.printStackTrace();
@@ -145,8 +146,8 @@ public class StorySaveManager {
     }
 
     public static void saveGame(int level, String character, int hp, int gold, int score, int potions, float checkpointX) {
-        int ch = (level - 1) / StoryChapterConfig.STAGES_PER_CHAPTER + 1;
-        int st = (level - 1) % StoryChapterConfig.STAGES_PER_CHAPTER + 1;
+        int ch = StoryChapterConfig.chapterOf(level);
+        int st = StoryChapterConfig.stageOf(level);
         saveProgress(ch, st, character, hp, gold, score, potions, checkpointX);
     }
 
@@ -169,23 +170,25 @@ public class StorySaveManager {
         if (ch > StoryChapterConfig.MAX_CHAPTERS) {
             clearSave(); // Đã phá đảo toàn bộ chiến dịch!
         } else {
-            saveProgress(ch, st, character, hp, gold, score, potions, 10.0f);
+            saveProgress(ch, st, character, hp, gold, score, potions, 3.0f);
         }
     }
 
     public static void clearSave() {
         try {
             Preferences prefs = Gdx.app.getPreferences(PREF_NAME);
-            prefs.remove("hasSavedGame");
-            prefs.remove("savedChapter");
-            prefs.remove("savedStage");
-            prefs.remove("savedLevel");
-            prefs.remove("savedCharacter");
-            prefs.remove("savedHp");
-            prefs.remove("savedGold");
-            prefs.remove("savedScore");
-            prefs.remove("savedPotions");
-            prefs.remove("savedCheckpointX");
+            // Ghi tường minh false trước khi flush: WebPreferences của gdx-teavm có lỗi xóa vòng lặp xuôi
+            // khiến khóa đã remove đôi khi còn sót lại trong localStorage sau khi tải lại trang.
+            prefs.putBoolean("hasSavedGame", false);
+            prefs.putInteger("savedChapter", 1);
+            prefs.putInteger("savedStage", 1);
+            prefs.putInteger("savedLevel", 1);
+            prefs.putString("savedCharacter", "P1");
+            prefs.putInteger("savedHp", 100);
+            prefs.putInteger("savedGold", 0);
+            prefs.putInteger("savedScore", 0);
+            prefs.putInteger("savedPotions", 1);
+            prefs.putFloat("savedCheckpointX", 3.0f);
             prefs.flush();
         } catch (Exception e) {
             e.printStackTrace();

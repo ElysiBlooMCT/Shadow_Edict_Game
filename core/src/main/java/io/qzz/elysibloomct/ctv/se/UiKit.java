@@ -79,16 +79,19 @@ public final class UiKit {
 
     /** Nạp 1 bản RIÊNG của font (mỗi bản có tỉ lệ riêng, không ảnh hưởng nhau). */
     private static BitmapFont scaled(String path, float scale, float fallbackScale) {
-        BitmapFont f = loadFont(path, fallbackScale);
-        if (com.badlogic.gdx.Gdx.files.internal(path).exists()) f.getData().setScale(scale);
-        return f;
+        return loadFont(path, scale, fallbackScale);
     }
 
     private static BitmapFont loadFont(String path, float fallbackScale) {
+        return loadFont(path, 1f, fallbackScale);
+    }
+
+    private static BitmapFont loadFont(String path, float loadedScale, float fallbackScale) {
         try {
             com.badlogic.gdx.files.FileHandle fh = com.badlogic.gdx.Gdx.files.internal(path);
             if (fh.exists()) {
                 BitmapFont f = new BitmapFont(fh);
+                if (loadedScale != 1f) f.getData().setScale(loadedScale);
                 f.setUseIntegerPositions(false);
                 for (TextureRegion r : f.getRegions()) {
                     r.getTexture().setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
@@ -451,6 +454,13 @@ public final class UiKit {
 
     public static boolean wasModalKeyConsumedThisFrame() {
         return Gdx.graphics != null && modalKeyConsumedFrame == Gdx.graphics.getFrameId();
+    }
+
+    /** Kiểm tra một modal có đang nằm trên cùng của Stage hay không (tránh modal bên dưới cướp phím Esc/Enter). */
+    public static boolean isTopModal(com.badlogic.gdx.scenes.scene2d.Stage stage, com.badlogic.gdx.scenes.scene2d.Actor root) {
+        if (stage == null || root == null || root.getStage() != stage) return false;
+        com.badlogic.gdx.utils.Array<com.badlogic.gdx.scenes.scene2d.Actor> actors = stage.getActors();
+        return actors.size > 0 && actors.peek() == root;
     }
 
     public static void dispose() {

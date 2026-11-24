@@ -4,6 +4,7 @@
 
     <uses-feature android:glEsVersion="0x00020000" android:required="true"/>
     <uses-feature android:name="android.hardware.type.pc" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <!-- Quyền truy cập Internet & Micro (Voice Chat trực tuyến) -->
     <uses-permission android:name="android.permission.INTERNET" />

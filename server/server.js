@@ -40,26 +40,39 @@ function allowPacket(socket, kind) {
     return ++c.n <= RATE_LIMIT_PER_SEC;
 }
 
+const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+const makeNullDict = (src) => {
+    const out = Object.create(null);
+    if (src && typeof src === 'object') {
+        Object.keys(src).forEach((k) => { out[k] = src[k]; });
+    }
+    return out;
+};
+
 // ---------------------------------------------------------------------
 //  LƯU TRỮ NGƯỜI CHƠI (users.json)
 // ---------------------------------------------------------------------
 const DATA_FILE = process.env.AL_DATA_FILE || path.join(__dirname, 'users.json');
-let db = { users: {}, deviceIndex: {} }; // users[userId] = {...}; deviceIndex[hash(deviceId)] = userId
+let db = { users: Object.create(null), deviceIndex: Object.create(null) }; // users[userId] = {...}; deviceIndex[hash(deviceId)] = userId
 
 function loadDb() {
     try {
         if (fs.existsSync(DATA_FILE)) {
-            db = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-            db.users = db.users || {};
-            db.deviceIndex = db.deviceIndex || {};
+            const raw = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+            db = {
+                users: makeNullDict(raw && raw.users),
+                deviceIndex: makeNullDict(raw && raw.deviceIndex),
+            };
             // Dữ liệu từ server bản cũ: bảo đảm mọi user đều đủ các trường bắt buộc
             Object.keys(db.users).forEach((id) => {
                 const u = db.users[id];
                 if (!u || typeof u !== 'object') { delete db.users[id]; return; }
                 u.userId = u.userId || id;
-                u.name = u.name || 'Chiến Thần';
-                u.level = Number(u.level) || 1;
-                u.gold = Number.isFinite(Number(u.gold)) ? Number(u.gold) : 500;
+                u.name = cleanName(u.name || 'Chiến Thần');
+                u.level = Number.isFinite(Number(u.level)) && Number(u.level) >= 1 ? Math.floor(Number(u.level)) : 1;
+                u.gold = Number.isFinite(Number(u.gold)) && Number(u.gold) >= 0 ? Math.floor(Number(u.gold)) : 500;
+                u.matches = Number.isFinite(Number(u.matches)) && Number(u.matches) >= 0 ? Math.floor(Number(u.matches)) : 0;
+                u.wins = Number.isFinite(Number(u.wins)) && Number(u.wins) >= 0 ? Math.min(u.matches, Math.floor(Number(u.wins))) : 0;
                 ['friends', 'incoming', 'outgoing'].forEach((k) => { if (!Array.isArray(u[k])) u[k] = []; });
             });
         }
@@ -70,30 +83,66 @@ function loadDb() {
 }
 
 let saveTimer = null;
+let isSaving = false;
+let saveQueued = false;
+function flushDbAsync() {
+    if (isSaving) {
+        saveQueued = true;
+        return;
+    }
+    isSaving = true;
+    saveQueued = false;
+    const tmp = DATA_FILE + '.tmp';
+    const payload = JSON.stringify(db);
+    fs.writeFile(tmp, payload, (err) => {
+        if (err) {
+            console.error('Loi luu du lieu:', err.message);
+            isSaving = false;
+            if (saveQueued) flushDbAsync();
+            return;
+        }
+        fs.rename(tmp, DATA_FILE, (rErr) => {
+            if (rErr) console.error('Loi doi ten file du lieu:', rErr.message);
+            isSaving = false;
+            if (saveQueued) flushDbAsync();
+        });
+    });
+}
 function saveDb() {
-    // Ghi gộp sau 1s, ghi ra file tạm rồi đổi tên để không hỏng file khi server tắt giữa chừng
+    // Ghi gộp sau 1s, tuần tự hóa các lần ghi đĩa để không ghi đè file tạm cùng lúc
     if (saveTimer) return;
     saveTimer = setTimeout(() => {
         saveTimer = null;
-        const tmp = DATA_FILE + '.tmp';
-        fs.writeFile(tmp, JSON.stringify(db), (err) => {
-            if (err) return console.error('Loi luu du lieu:', err.message);
-            fs.rename(tmp, DATA_FILE, () => {});
-        });
+        flushDbAsync();
     }, 1000);
 }
+function flushDbSync() {
+    if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+    }
+    try {
+        const tmp = DATA_FILE + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify(db));
+        fs.renameSync(tmp, DATA_FILE);
+    } catch (e) {
+        console.error('Loi luu dong bo khi tat server:', e.message);
+    }
+}
+process.on('SIGINT', () => { flushDbSync(); process.exit(0); });
+process.on('SIGTERM', () => { flushDbSync(); process.exit(0); });
 
 // Chỉ lưu dạng băm của deviceId (không lưu định danh máy gốc)
 const hashDevice = (deviceId) => crypto.createHash('sha256').update(String(deviceId)).digest('hex');
 
 // Cấp mã AL-XXXX duy nhất (4 số; nếu hết chỗ thì tự lên 5-6 số)
 function allocateUserId(preferred) {
-    if (preferred && /^AL-\d{4,6}$/.test(preferred) && !db.users[preferred]) return preferred;
+    if (typeof preferred === 'string' && /^AL-\d{4,6}$/.test(preferred) && !hasOwn(db.users, preferred)) return preferred;
     for (let digits = 4; digits <= 6; digits++) {
         const min = 10 ** (digits - 1), span = 9 * min;
         for (let i = 0; i < 50; i++) {
             const id = 'AL-' + (min + Math.floor(Math.random() * span));
-            if (!db.users[id]) return id;
+            if (!hasOwn(db.users, id)) return id;
         }
     }
     return 'AL-' + Date.now();
@@ -107,32 +156,32 @@ const fold = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g,
 // ---------------------------------------------------------------------
 //  TRẠNG THÁI ONLINE (trong RAM)
 // ---------------------------------------------------------------------
-const online = {};   // userId -> { socketId, status, roomCode, mode }
+const online = Object.create(null);   // userId -> { socketId, status, roomCode, mode }
 
 function presenceOf(userId) {
-    const p = online[userId];
+    const p = hasOwn(online, userId) ? online[userId] : null;
     return p ? { status: p.status, roomCode: p.roomCode, mode: p.mode }
              : { status: 'OFFLINE', roomCode: '', mode: '' };
 }
 
 function emitToUser(userId, event, payload) {
-    const p = online[userId];
+    const p = hasOwn(online, userId) ? online[userId] : null;
     if (p) io.to(p.socketId).emit(event, payload);
 }
 
 function friendView(userId) {
-    const u = db.users[userId];
+    const u = hasOwn(db.users, userId) ? db.users[userId] : null;
     return { userId, name: u ? u.name : '???', level: u ? u.level : 1, ...presenceOf(userId) };
 }
 
 function sendFriendsList(userId) {
-    const u = db.users[userId];
+    const u = hasOwn(db.users, userId) ? db.users[userId] : null;
     if (!u) return;
-    emitToUser(userId, 'friendsList', u.friends.filter((f) => db.users[f]).map(friendView));
+    emitToUser(userId, 'friendsList', u.friends.filter((f) => hasOwn(db.users, f)).map(friendView));
 }
 
 function broadcastPresence(userId) {
-    const u = db.users[userId];
+    const u = hasOwn(db.users, userId) ? db.users[userId] : null;
     if (!u) return;
     const payload = { userId, ...presenceOf(userId) };
     u.friends.forEach((f) => emitToUser(f, 'friendPresenceUpdate', payload));
@@ -141,12 +190,12 @@ function broadcastPresence(userId) {
 // ---------------------------------------------------------------------
 //  PHÒNG CHƠI
 // ---------------------------------------------------------------------
-const rooms = {};
+const rooms = Object.create(null);
 
 function newRoomCode() {
     for (let i = 0; i < 100; i++) {
         const code = Math.floor(1000 + Math.random() * 9000).toString();
-        if (!rooms[code]) return code;
+        if (!hasOwn(rooms, code)) return code;
     }
     return Date.now().toString().slice(-6);
 }
@@ -155,7 +204,7 @@ function startRoomMatch(code, room) {
     console.log(`🔥 Phong [${code}] bat dau tran dau! (${room.players.length} nguoi)`);
     room.players.forEach((p) => {
         p.ready = false; // trận sau phải bấm sẵn sàng lại
-        if (p.userId && online[p.userId]) {
+        if (p.userId && hasOwn(online, p.userId) && online[p.userId].socketId === p.id) {
             online[p.userId].status = 'IN_GAME';
             broadcastPresence(p.userId);
         }
@@ -170,13 +219,13 @@ function leaveCurrentRoom(socket) {
     if (!code) return;
     socket.leave(code);
     socket.roomCode = null;
-    if (socket.userId && online[socket.userId]) {
+    if (socket.userId && hasOwn(online, socket.userId) && online[socket.userId].socketId === socket.id) {
         online[socket.userId].status = 'ONLINE';
         online[socket.userId].roomCode = '';
         online[socket.userId].mode = '';
         broadcastPresence(socket.userId);
     }
-    const room = rooms[code];
+    const room = hasOwn(rooms, code) ? rooms[code] : null;
     if (!room) return;
     const leavingPlayer = room.players.find((p) => p.id === socket.id);
     room.players = room.players.filter((p) => p.id !== socket.id);
@@ -204,49 +253,75 @@ io.on('connection', (socket) => {
 
     // Đăng ký/đăng nhập tự động theo máy: cùng deviceId -> luôn nhận lại cùng mã AL-XXXX
     socket.on('registerUser', (data) => {
-        data = data || {};
-        if (!data.deviceId) return socket.emit('errorMsg', 'Thieu deviceId - hay cap nhat game!');
-        const dHash = hashDevice(data.deviceId);
-        let userId = db.deviceIndex[dHash];
-        if (!userId || !db.users[userId]) {
+        data = (data && typeof data === 'object') ? data : {};
+        if (typeof data.deviceId !== 'string' || !data.deviceId.trim()) {
+            return socket.emit('errorMsg', 'Thieu deviceId - hay cap nhat game!');
+        }
+        const dHash = hashDevice(data.deviceId.trim());
+        let userId = hasOwn(db.deviceIndex, dHash) ? db.deviceIndex[dHash] : null;
+        if (!userId || !hasOwn(db.users, userId)) {
             userId = allocateUserId(data.userId);
             db.users[userId] = {
-                userId, name: cleanName(data.name), level: 1, gold: 500,
+                userId, name: cleanName(data.name), level: 1, gold: 500, matches: 0, wins: 0,
+                favoriteHero: 'Vân Tiêu',
                 friends: [], incoming: [], outgoing: [], createdAt: Date.now(),
             };
             db.deviceIndex[dHash] = userId;
             console.log(`🆕 Nguoi choi moi ${userId} (${db.users[userId].name})`);
-        } else if (data.name) {
+        } else if (typeof data.name === 'string' && data.name.trim()) {
             db.users[userId].name = cleanName(data.name); // đổi tên trong game -> cập nhật server
         }
         const u = db.users[userId];
-        if (data.level && data.level > (u.level || 1)) u.level = data.level;
-        if (data.gold !== undefined && data.gold > (u.gold || 0)) u.gold = data.gold;
-        if (data.matches !== undefined) u.matches = Math.max(u.matches || 0, data.matches);
-        if (data.wins !== undefined) u.wins = Math.max(u.wins || 0, data.wins);
-        if (data.favoriteHero) u.favoriteHero = data.favoriteHero;
+        const safeNum = (v, min, max) => (typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max) ? Math.floor(v) : null;
+        const lvl = safeNum(data.level, 1, 999);
+        if (lvl !== null && lvl > (u.level || 1)) u.level = lvl;
+        const gld = safeNum(data.gold, 0, 100000000);
+        if (gld !== null && gld > (u.gold || 0)) u.gold = gld;
+        const mch = safeNum(data.matches, 0, 1000000);
+        if (mch !== null) u.matches = Math.max(u.matches || 0, mch);
+        const wns = safeNum(data.wins, 0, 1000000);
+        if (wns !== null) u.wins = Math.min(u.matches || 0, Math.max(u.wins || 0, wns));
+        if (typeof data.favoriteHero === 'string' && data.favoriteHero.trim()) {
+            u.favoriteHero = data.favoriteHero.replace(/[\r\n\t]/g, ' ').trim().slice(0, 24);
+        }
         u.lastSeen = Date.now();
         saveDb();
 
-        // Một tài khoản chỉ có 1 kết nối: kết nối cũ (nếu còn) bị thay thế
+        // Nếu socket này đổi tài khoản trên cùng kết nối thì dọn bản ghi online cũ
+        const prevUid = socket.userId;
+        if (prevUid && prevUid !== userId && hasOwn(online, prevUid) && online[prevUid].socketId === socket.id) {
+            delete online[prevUid];
+            broadcastPresence(prevUid);
+        }
+
+        // Bảo toàn trạng thái IN_ROOM/IN_GAME nếu người chơi đang ở trong phòng mà đổi tên
+        const activeRoom = (socket.roomCode && hasOwn(rooms, socket.roomCode)) ? rooms[socket.roomCode] : null;
+        const prevOnline = (hasOwn(online, userId) && online[userId].socketId === socket.id) ? online[userId] : null;
         socket.userId = userId;
-        online[userId] = { socketId: socket.id, status: 'ONLINE', roomCode: '', mode: '' };
+        online[userId] = activeRoom
+            ? {
+                socketId: socket.id,
+                status: (prevOnline && prevOnline.status === 'IN_GAME') ? 'IN_GAME' : 'IN_ROOM',
+                roomCode: socket.roomCode,
+                mode: activeRoom.mode,
+            }
+            : { socketId: socket.id, status: 'ONLINE', roomCode: '', mode: '' };
 
         socket.emit('userRegistered', { userId, name: u.name, gold: u.gold, level: u.level });
         sendFriendsList(userId);
         u.incoming.forEach((rid) => {
-            if (db.users[rid]) socket.emit('friendRequestReceived', { requesterId: rid, requesterName: db.users[rid].name });
+            if (hasOwn(db.users, rid)) socket.emit('friendRequestReceived', { requesterId: rid, requesterName: db.users[rid].name });
         });
         broadcastPresence(userId);
     });
 
-    const me = () => (socket.userId && db.users[socket.userId]) ? db.users[socket.userId] : null;
+    const me = () => (socket.userId && hasOwn(db.users, socket.userId)) ? db.users[socket.userId] : null;
 
     socket.on('getFriendsList', () => { if (me()) sendFriendsList(socket.userId); });
 
     socket.on('getUserProfile', (targetUserId) => {
         targetUserId = String(targetUserId || '').trim().toUpperCase();
-        const u = db.users[targetUserId];
+        const u = hasOwn(db.users, targetUserId) ? db.users[targetUserId] : null;
         if (!u) {
             return socket.emit('userProfileData', { userId: targetUserId, found: false });
         }
@@ -286,7 +361,8 @@ io.on('connection', (socket) => {
     });
 
     function makeFriends(a, b) {
-        const ua = db.users[a], ub = db.users[b];
+        const ua = hasOwn(db.users, a) ? db.users[a] : null;
+        const ub = hasOwn(db.users, b) ? db.users[b] : null;
         if (!ua || !ub) return;
         [ua, ub].forEach((x) => {
             x.incoming = x.incoming.filter((id) => id !== a && id !== b);
@@ -303,7 +379,8 @@ io.on('connection', (socket) => {
 
     socket.on('sendFriendRequest', (targetId) => {
         const u = me();
-        const t = db.users[String(targetId || '').toUpperCase()];
+        const tid = String(targetId || '').trim().toUpperCase();
+        const t = hasOwn(db.users, tid) ? db.users[tid] : null;
         if (!u || !t || t.userId === u.userId) return;
         if (u.friends.includes(t.userId)) return;
         if (u.incoming.includes(t.userId)) return makeFriends(u.userId, t.userId); // 2 bên cùng gửi -> thành bạn
@@ -315,36 +392,39 @@ io.on('connection', (socket) => {
 
     socket.on('acceptFriendRequest', (requesterId) => {
         const u = me();
-        if (!u || !u.incoming.includes(requesterId)) return;
-        makeFriends(u.userId, requesterId);
+        const rid = String(requesterId || '').trim().toUpperCase();
+        if (!u || !u.incoming.includes(rid)) return;
+        makeFriends(u.userId, rid);
     });
 
     socket.on('declineFriendRequest', (requesterId) => {
         const u = me();
-        const r = db.users[requesterId];
+        const rid = String(requesterId || '').trim().toUpperCase();
+        const r = hasOwn(db.users, rid) ? db.users[rid] : null;
         if (!u) return;
-        u.incoming = u.incoming.filter((id) => id !== requesterId);
+        u.incoming = u.incoming.filter((id) => id !== rid);
         if (r) r.outgoing = r.outgoing.filter((id) => id !== u.userId);
         saveDb();
     });
 
     socket.on('removeFriend', (friendId) => {
         const u = me();
-        const f = db.users[friendId];
+        const fid = String(friendId || '').trim().toUpperCase();
+        const f = hasOwn(db.users, fid) ? db.users[fid] : null;
         if (!u) return;
-        u.friends = u.friends.filter((id) => id !== friendId);
+        u.friends = u.friends.filter((id) => id !== fid);
         if (f) f.friends = f.friends.filter((id) => id !== u.userId);
         saveDb();
-        emitToUser(u.userId, 'friendRemoved', { userId: friendId });
-        emitToUser(friendId, 'friendRemoved', { userId: u.userId });
+        emitToUser(u.userId, 'friendRemoved', { userId: fid });
+        emitToUser(fid, 'friendRemoved', { userId: u.userId });
         sendFriendsList(u.userId);
-        sendFriendsList(friendId);
+        sendFriendsList(fid);
     });
 
     socket.on('updatePresence', (data) => {
         const u = me();
-        if (!u || !online[u.userId]) return;
-        data = data || {};
+        if (!u || !hasOwn(online, u.userId) || online[u.userId].socketId !== socket.id) return;
+        data = (data && typeof data === 'object') ? data : {};
         const p = online[u.userId];
         p.status = ['ONLINE', 'IN_ROOM', 'IN_GAME'].includes(data.status) ? data.status : 'ONLINE';
         p.roomCode = String(data.roomCode || '');
@@ -354,9 +434,10 @@ io.on('connection', (socket) => {
 
     socket.on('inviteToMatch', (data) => {
         const u = me();
-        data = data || {};
-        if (!u || !u.friends.includes(data.targetUserId)) return; // chỉ mời được bạn bè
-        emitToUser(data.targetUserId, 'matchInviteReceived', {
+        data = (data && typeof data === 'object') ? data : {};
+        const tid = String(data.targetUserId || '').trim().toUpperCase();
+        if (!u || !u.friends.includes(tid)) return; // chỉ mời được bạn bè
+        emitToUser(tid, 'matchInviteReceived', {
             inviterId: u.userId, inviterName: u.name,
             roomCode: String(data.roomCode || ''), mode: String(data.mode || '1v1'),
         });
@@ -366,27 +447,29 @@ io.on('connection', (socket) => {
 
     socket.on('getRoomState', () => {
         const code = socket.roomCode;
-        if (code && rooms[code]) {
+        if (code && hasOwn(rooms, code)) {
             socket.emit('updateRoomState', rooms[code]);
         }
     });
 
     socket.on('createRoom', (data) => {
+        data = (data && typeof data === 'object') ? data : {};
         leaveCurrentRoom(socket);
         const roomCode = newRoomCode();
-        const mode = normMode(data && data.type);
-        const pName = (data && data.name) ? cleanName(data.name) : (socket.userId && db.users[socket.userId] ? db.users[socket.userId].name : 'Chiến Thần');
-        const pTeam = (data && data.team) ? ((data.team === 2) ? 2 : 1) : 1;
-        const pChar = (data && data.charId) ? ((data.charId === 2) ? 2 : 1) : 1;
-        const pUid = (data && data.userId) ? String(data.userId).toUpperCase() : (socket.userId || null);
+        const mode = normMode(data.type);
+        const pName = data.name ? cleanName(data.name) : (socket.userId && hasOwn(db.users, socket.userId) ? db.users[socket.userId].name : 'Chiến Thần');
+        const pTeam = data.team ? ((data.team === 2) ? 2 : 1) : 1;
+        const pChar = data.charId ? ((data.charId === 2) ? 2 : 1) : 1;
+        const pUid = data.userId ? String(data.userId).trim().toUpperCase() : (socket.userId || '');
+        const selMap = parseInt(data.selectedMap, 10);
         rooms[roomCode] = {
             mode,
-            selectedMap: (data && data.selectedMap) ? ((data.selectedMap >= 1 && data.selectedMap <= 3) ? data.selectedMap : 1) : 1,
+            selectedMap: (selMap >= 1 && selMap <= 3) ? selMap : 1,
             players: [{ id: socket.id, userId: pUid, name: pName, team: pTeam, charId: pChar, ready: false }]
         };
         socket.join(roomCode);
         socket.roomCode = roomCode;
-        if (socket.userId && online[socket.userId]) {
+        if (socket.userId && hasOwn(online, socket.userId) && online[socket.userId].socketId === socket.id) {
             online[socket.userId].status = 'IN_ROOM';
             online[socket.userId].roomCode = roomCode;
             online[socket.userId].mode = mode;
@@ -398,32 +481,57 @@ io.on('connection', (socket) => {
     });
 
     socket.on('joinRoom', (roomCode, data) => {
+        data = (data && typeof data === 'object') ? data : {};
         roomCode = String(roomCode || '').trim();
-        const room = rooms[roomCode];
+        const room = hasOwn(rooms, roomCode) ? rooms[roomCode] : null;
         if (!room) return socket.emit('errorMsg', 'Mã phòng không tồn tại!');
 
-        // Đã ở trong phòng (VD: quay lại sảnh sau trận) -> chỉ đồng bộ lại, không báo "phòng đầy"
-        const idx = room.players.findIndex((p) => p.id === socket.id);
+        const pUid = data.userId ? String(data.userId).trim().toUpperCase() : (socket.userId || '');
+        // Đã ở trong phòng (VD: quay lại sảnh sau trận hoặc kết nối lại bằng socket mới trước khi socket cũ timeout)
+        let idx = room.players.findIndex((p) => p.id === socket.id);
+        if (idx < 0 && pUid) {
+            idx = room.players.findIndex((p) => p.userId && p.userId === pUid);
+            if (idx >= 0) {
+                const oldSocketId = room.players[idx].id;
+                const oldSock = io.sockets.sockets.get(oldSocketId);
+                if (oldSock && oldSock.id !== socket.id) {
+                    oldSock.leave(roomCode);
+                    if (oldSock.roomCode === roomCode) oldSock.roomCode = null;
+                }
+                if (socket.roomCode && socket.roomCode !== roomCode) {
+                    leaveCurrentRoom(socket);
+                }
+                room.players[idx].id = socket.id;
+                socket.join(roomCode);
+                socket.roomCode = roomCode;
+            }
+        }
         if (idx >= 0) {
-            if (data && data.team) room.players[idx].team = (data.team === 2) ? 2 : 1;
-            if (data && data.charId) room.players[idx].charId = (data.charId === 2) ? 2 : 1;
-            if (data && data.name) room.players[idx].name = cleanName(data.name);
-            if (data && data.userId) room.players[idx].userId = String(data.userId).toUpperCase();
+            if (data.team) room.players[idx].team = (data.team === 2) ? 2 : 1;
+            if (data.charId) room.players[idx].charId = (data.charId === 2) ? 2 : 1;
+            if (data.name) room.players[idx].name = cleanName(data.name);
+            if (pUid) room.players[idx].userId = pUid;
             room.players.forEach((p) => { p.ready = false; });
+            if (socket.userId && hasOwn(online, socket.userId) && online[socket.userId].socketId === socket.id) {
+                online[socket.userId].status = 'IN_ROOM';
+                online[socket.userId].roomCode = roomCode;
+                online[socket.userId].mode = room.mode;
+                broadcastPresence(socket.userId);
+            }
             socket.emit('roomJoined', { roomCode, playerIndex: idx + 1 });
             io.to(roomCode).emit('updateRoomState', room);
             return;
         }
         // Không cho vào nhầm chế độ (VD nhập mã phòng 5v5 ở sảnh 1v1): hai máy sẽ vào hai chế độ khác nhau
-        if (data && ROOM_MODES.includes(data.type) && data.type !== room.mode) {
+        if (ROOM_MODES.includes(data.type) && data.type !== room.mode) {
             return socket.emit('errorMsg', `Mã ${roomCode} là phòng ${MODE_NAMES[room.mode] || room.mode}, hãy vào đúng sảnh!`);
         }
         const maxPlayers = (room.mode === '5v5') ? 10 : 2;
         if (room.players.length >= maxPlayers) return socket.emit('errorMsg', `Phòng đã đầy (${maxPlayers} người)!`);
 
         leaveCurrentRoom(socket);
-        const pName = (data && data.name) ? cleanName(data.name) : (socket.userId && db.users[socket.userId] ? db.users[socket.userId].name : 'Chiến Thần');
-        let pTeam = (data && data.team) ? ((data.team === 2) ? 2 : 1) : (room.players.length % 2 === 0 ? 1 : 2);
+        const pName = data.name ? cleanName(data.name) : (socket.userId && hasOwn(db.users, socket.userId) ? db.users[socket.userId].name : 'Chiến Thần');
+        let pTeam = data.team ? ((data.team === 2) ? 2 : 1) : (room.players.length % 2 === 0 ? 1 : 2);
         if (room.mode === '5v5') {
             // Cân bằng phe khi vào phòng: game luôn gửi phe đang chọn (mặc định Xanh) nên trước đây
             // mọi người đều rơi vào cùng phe Xanh. Nếu phe yêu cầu đã đông hơn thì xếp sang phe còn lại
@@ -433,13 +541,12 @@ io.on('connection', (socket) => {
             if (pTeam === 1 && blue > red) pTeam = 2;
             else if (pTeam === 2 && red > blue) pTeam = 1;
         }
-        const pChar = (data && data.charId) ? ((data.charId === 2) ? 2 : 1) : 2;
-        const pUid = (data && data.userId) ? String(data.userId).toUpperCase() : (socket.userId || null);
+        const pChar = data.charId ? ((data.charId === 2) ? 2 : 1) : 2;
         const newPlayer = { id: socket.id, userId: pUid, name: pName, team: pTeam, charId: pChar, ready: false };
         room.players.push(newPlayer);
         socket.join(roomCode);
         socket.roomCode = roomCode;
-        if (socket.userId && online[socket.userId]) {
+        if (socket.userId && hasOwn(online, socket.userId) && online[socket.userId].socketId === socket.id) {
             online[socket.userId].status = 'IN_ROOM';
             online[socket.userId].roomCode = roomCode;
             online[socket.userId].mode = room.mode;
@@ -454,7 +561,7 @@ io.on('connection', (socket) => {
     socket.on('leaveRoom', () => leaveCurrentRoom(socket));
 
     socket.on('selectCharacter', (charId) => {
-        const room = socket.roomCode && rooms[socket.roomCode];
+        const room = (socket.roomCode && hasOwn(rooms, socket.roomCode)) ? rooms[socket.roomCode] : null;
         if (!room) return;
         const player = room.players.find((p) => p.id === socket.id);
         if (player) {
@@ -464,7 +571,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('selectTeam', (team) => {
-        const room = socket.roomCode && rooms[socket.roomCode];
+        const room = (socket.roomCode && hasOwn(rooms, socket.roomCode)) ? rooms[socket.roomCode] : null;
         if (!room) return;
         const player = room.players.find((p) => p.id === socket.id);
         if (player) {
@@ -474,21 +581,26 @@ io.on('connection', (socket) => {
     });
 
     socket.on('selectMap', (mapId) => {
-        const room = socket.roomCode && rooms[socket.roomCode];
+        const room = (socket.roomCode && hasOwn(rooms, socket.roomCode)) ? rooms[socket.roomCode] : null;
         if (!room) return;
         if (room.players.length > 0 && room.players[0].id !== socket.id) return;
-        const m = parseInt(mapId);
+        const m = parseInt(mapId, 10);
         room.selectedMap = (m >= 1 && m <= 3) ? m : 1;
         io.to(socket.roomCode).emit('updateRoomState', room);
         console.log(`🗺️ Phong [${socket.roomCode}] chon Ban do: ${room.selectedMap}`);
     });
 
     socket.on('startGame', () => {
-        const room = socket.roomCode && rooms[socket.roomCode];
+        const room = (socket.roomCode && hasOwn(rooms, socket.roomCode)) ? rooms[socket.roomCode] : null;
         if (!room) return;
         // Chỉ chủ phòng (người đầu tiên trong players) mới có quyền phát lệnh bắt đầu trận đấu
         if (room.players.length > 0 && room.players[0].id !== socket.id) {
             socket.emit('errorMsg', 'Chỉ chủ phòng mới có quyền bắt đầu trận đấu!');
+            return;
+        }
+        // Chế độ 1v1 / Hợp tác phải đủ 2 người mới được bắt đầu (tránh race condition khi khách vừa thoát)
+        if (room.mode !== '5v5' && room.players.length < 2) {
+            socket.emit('errorMsg', 'Cần đủ 2 người chơi để bắt đầu trận đấu!');
             return;
         }
         // Kiểm tra xem tất cả người chơi khác (từ index 1 trở đi) đã bấm Sẵn sàng chưa
@@ -503,7 +615,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('toggleReady', () => {
-        const room = socket.roomCode && rooms[socket.roomCode];
+        const room = (socket.roomCode && hasOwn(rooms, socket.roomCode)) ? rooms[socket.roomCode] : null;
         if (!room) return;
         const player = room.players.find((p) => p.id === socket.id);
         if (!player) return;
@@ -525,10 +637,27 @@ io.on('connection', (socket) => {
     });
 
     socket.on('playerAction', (actionData) => {
-        if (!socket.roomCode || !allowPacket(socket, 'action')) return;
+        if (!socket.roomCode || !actionData || typeof actionData !== 'object' || !allowPacket(socket, 'action')) return;
         // Đồng bộ đòn đánh, kỹ năng, chat văn bản và gói âm thanh voice chat trong phòng
-        if (actionData && actionData.type === 'voice') {
-            socket.volatile.to(socket.roomCode).emit('enemyAction', actionData);
+        if (actionData.type === 'voice') {
+            if (typeof actionData.pcm !== 'string' || actionData.pcm.length > 4500) return;
+            const safeVoice = {
+                type: 'voice',
+                sender: String(actionData.sender || 'Đồng đạo').replace(/[\r\n]/g, ' ').trim().slice(0, 24),
+                pcm: actionData.pcm,
+            };
+            socket.volatile.to(socket.roomCode).emit('enemyAction', safeVoice);
+        } else if (actionData.type === 'chat') {
+            if (typeof actionData.text !== 'string') return;
+            const cleanText = actionData.text.replace(/[\r\n]/g, ' ').trim().slice(0, 140);
+            if (!cleanText) return;
+            const safeChat = {
+                type: 'chat',
+                sender: String(actionData.sender || 'Đồng đạo').replace(/[\r\n]/g, ' ').trim().slice(0, 24),
+                team: actionData.team === 2 ? 2 : 1,
+                text: cleanText,
+            };
+            socket.to(socket.roomCode).emit('enemyAction', safeChat);
         } else {
             socket.to(socket.roomCode).emit('enemyAction', actionData);
         }
@@ -540,9 +669,9 @@ io.on('connection', (socket) => {
         // Bản cũ xóa cả phòng khi 1 người thoát; giờ chỉ rời phòng, người còn lại vẫn giữ phòng
         leaveCurrentRoom(socket);
         const uid = socket.userId;
-        if (uid && online[uid] && online[uid].socketId === socket.id) {
+        if (uid && hasOwn(online, uid) && online[uid].socketId === socket.id) {
             delete online[uid];
-            if (db.users[uid]) { db.users[uid].lastSeen = Date.now(); saveDb(); }
+            if (hasOwn(db.users, uid)) { db.users[uid].lastSeen = Date.now(); saveDb(); }
             broadcastPresence(uid);
         }
     });

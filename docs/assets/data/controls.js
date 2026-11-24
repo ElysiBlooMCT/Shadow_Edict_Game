@@ -9,21 +9,21 @@ SITE.controls = {
     {
       name: "Máy tính: di chuyển",
       steps: [
-        "**A / D**: đi trái, phải.",
-        "**W / Space**: nhảy, nhảy đúp, bật tường.",
-        "**Giữ W**: leo thang, leo tường.",
+        "**A / D** hoặc **← / →**: đi trái, phải.",
+        "**W / ↑ / Space**: nhảy, nhảy đúp, bật tường, trèo mép.",
+        "**R** (hoặc giữ **W** cạnh thang/tường): bám tường, leo thang.",
         "**L / Shift / chuột phải**: lướt.",
-        "**S**: ngồi, đỡ đòn (parry).",
+        "**S / ↓**: ngồi, chui hầm, đỡ đòn (parry).",
       ],
     },
     {
-      name: "Máy tính: chiến đấu",
+      name: "Máy tính: chiến đấu & trực tuyến",
       steps: [
-        "**J / chuột trái**: đánh, giữ để ra combo.",
-        "**U**: tuyệt kỹ. **K**: ứng kích từ trên cao.",
-        "**F / Q**: ám sát sau lưng.",
-        "**Tab**: đổi vũ khí. **E**: bắn pháo, nói chuyện, cứu đồng đội.",
-        "**B**: tiệm đồ. **H**: uống thuốc. **P / Esc**: tạm dừng.",
+        "**J / Ctrl** (giữ để nối combo) hoặc bấm **chuột trái**: tấn công.",
+        "**Z / X / C** hoặc **I / O / Y**: 3 kỹ năng chủ động. **U**: tuyệt kỹ.",
+        "**K / chuột giữa**: ứng kích từ trên cao. **F / Q**: ám sát sau lưng.",
+        "**Tab** hoặc phím **1–5**: đổi vũ khí. **E**: bắn pháo, nói chuyện, cứu đồng đội.",
+        "**B**: tiệm đồ. **H**: uống thuốc. **T**: chat, giữ **V** / bấm **M**: micro. **F1**: ẩn/hiện nút ảo. **P / Esc**: tạm dừng.",
       ],
     },
     {

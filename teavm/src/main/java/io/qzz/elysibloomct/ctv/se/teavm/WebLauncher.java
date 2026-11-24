@@ -8,9 +8,16 @@ import io.qzz.elysibloomct.ctv.se.NetworkManager;
 import io.qzz.elysibloomct.ctv.se.PortraitRotation;
 import io.qzz.elysibloomct.ctv.se.TextInputBridge;
 import org.teavm.jso.JSBody;
+import org.teavm.jso.JSFunctor;
+import org.teavm.jso.JSObject;
 
 /** Chạy game trên trình duyệt (gdx-teavm). */
 public class WebLauncher {
+    @JSFunctor
+    public interface TextCallback extends JSObject {
+        void onResult(String value);
+    }
+
     public static void main(String[] args) {
         // Online trên web dùng thư viện socket.io bản JavaScript, cùng server với PC/Android.
         NetworkManager.socketFactory = WebGameSocket::new;
@@ -20,9 +27,10 @@ public class WebLauncher {
         // Nút THOÁT trong game: về trang chủ website (trình duyệt không cho trang tự đóng tab).
         Main.exitHandler = WebLauncher::goHome;
 
-        // Điện thoại/máy tính bảng: chạm vào ô nhập chữ sẽ mở hộp nhập của trình duyệt để bàn phím hiện lên.
+        // Điện thoại/máy tính bảng: chạm vào ô nhập chữ sẽ mở hộp nhập HTML bất đồng bộ (không treo Socket.IO).
         if (isTouchDevice()) {
-            TextInputBridge.prompt = WebLauncher::askText;
+            TextInputBridge.prompt = (title, current, maxLength, onResult) ->
+                askTextAsync(title == null ? "" : title, current == null ? "" : current, maxLength, onResult::accept);
         }
 
         // Biểu tượng và tên trên tab trình duyệt (trang do gdx-teavm tạo không có sẵn).
@@ -122,14 +130,56 @@ public class WebLauncher {
     private static native void setupPageLayout();
 
 
-    @JSBody(script = "return ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;")
+    @JSBody(script = "return window.matchMedia ? window.matchMedia('(pointer: coarse)').matches : (('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0);")
     private static native boolean isTouchDevice();
 
-    /** Hộp nhập chữ của trình duyệt; trả về null khi bấm Hủy. */
-    @JSBody(params = {"title", "current"}, script = ""
-            + "var r = window.prompt(title, current == null ? '' : current);"
-            + "return (r === null || r === undefined) ? null : String(r);")
-    private static native String askText(String title, String current);
+    /**
+     * Hộp nhập chữ HTML bất đồng bộ (không khóa luồng JS như window.prompt, tránh đứt nhịp ping Socket.IO 5s).
+     * Gọi cb.onResult(null) khi người chơi bấm Hủy / Esc / chạm ra ngoài.
+     */
+    @JSBody(params = {"title", "current", "maxLen", "cb"}, script = ""
+        + "var old = document.getElementById('se-text-prompt');\n"
+        + "if (old && old.parentNode) old.parentNode.removeChild(old);\n"
+        + "if (!document.getElementById('se-text-prompt-css')) {\n"
+        + "  var st = document.createElement('style'); st.id = 'se-text-prompt-css';\n"
+        + "  st.textContent = '#se-text-prompt{position:fixed;inset:0;z-index:100000;display:flex;align-items:flex-start;justify-content:center;padding:18px;background:rgba(6,5,4,.78);font-family:system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif;}'\n"
+        + "    + '#se-text-prompt .box{width:min(440px,100%);margin-top:8vh;background:#16120f;color:#f2ebdf;border:2px solid #e2b65a;border-radius:12px;padding:16px;box-shadow:0 16px 36px rgba(0,0,0,.65);}'\n"
+        + "    + '#se-text-prompt label{display:block;margin:0 0 10px;font:700 1rem/1.3 system-ui,sans-serif;color:#f7e3b3;}'\n"
+        + "    + '#se-text-prompt input{box-sizing:border-box;width:100%;padding:11px 12px;border-radius:8px;border:2px solid #e2b65a;background:#0d0a08;color:#fff;font:600 16px/1.3 system-ui,sans-serif;outline:none;}'\n"
+        + "    + '#se-text-prompt .acts{display:flex;gap:10px;margin-top:12px;}'\n"
+        + "    + '#se-text-prompt button{flex:1;min-height:42px;border-radius:8px;font:700 .95rem/1.2 system-ui,sans-serif;cursor:pointer;}'\n"
+        + "    + '#se-text-prompt .ok{background:linear-gradient(180deg,#f7e3b3,#edcf8e);color:#1a1208;border:2px solid transparent;}'\n"
+        + "    + '#se-text-prompt .cancel{background:rgba(226,182,90,.1);color:#f2ebdf;border:2px solid #e2b65a;}';\n"
+        + "  document.head.appendChild(st);\n"
+        + "}\n"
+        + "var overlay = document.createElement('div'); overlay.id = 'se-text-prompt';\n"
+        + "var box = document.createElement('div'); box.className = 'box';\n"
+        + "var lbl = document.createElement('label'); lbl.textContent = title || 'Nhập chữ';\n"
+        + "var inp = document.createElement('input'); inp.type = 'text'; inp.value = current || '';\n"
+        + "if (maxLen > 0) inp.maxLength = maxLen;\n"
+        + "var acts = document.createElement('div'); acts.className = 'acts';\n"
+        + "var btnCancel = document.createElement('button'); btnCancel.type = 'button'; btnCancel.className = 'cancel'; btnCancel.textContent = 'Hủy';\n"
+        + "var btnOk = document.createElement('button'); btnOk.type = 'button'; btnOk.className = 'ok'; btnOk.textContent = 'Xong';\n"
+        + "acts.appendChild(btnCancel); acts.appendChild(btnOk);\n"
+        + "box.appendChild(lbl); box.appendChild(inp); box.appendChild(acts); overlay.appendChild(box);\n"
+        + "document.body.appendChild(overlay);\n"
+        + "var done = false;\n"
+        + "function finish(val) {\n"
+        + "  if (done) return; done = true;\n"
+        + "  if (overlay.parentNode) overlay.parentNode.removeChild(overlay);\n"
+        + "  var c = document.querySelector('canvas'); if (c && c.focus) c.focus();\n"
+        + "  cb(val);\n"
+        + "}\n"
+        + "btnOk.addEventListener('click', function () { finish(String(inp.value)); });\n"
+        + "btnCancel.addEventListener('click', function () { finish(null); });\n"
+        + "overlay.addEventListener('click', function (e) { if (e.target === overlay) finish(null); });\n"
+        + "inp.addEventListener('keydown', function (e) {\n"
+        + "  e.stopPropagation();\n"
+        + "  if (e.key === 'Enter') { e.preventDefault(); finish(String(inp.value)); }\n"
+        + "  else if (e.key === 'Escape') { e.preventDefault(); finish(null); }\n"
+        + "});\n"
+        + "setTimeout(function () { inp.focus(); try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch (e) {} }, 20);")
+    private static native void askTextAsync(String title, String current, int maxLen, TextCallback cb);
 
     @JSBody(script = "window.location.href = '../';")
     private static native void goHome();

@@ -520,7 +520,7 @@ public class MainMenuScreen extends ScreenAdapter implements NetworkManager.Frie
         };
         patchKeyHolder[0] = new InputListener() {
             @Override public boolean keyDown(InputEvent event, int keycode) {
-                if (panel.getStage() == null) return false;
+                if (!UiKit.isTopModal(stage, panel)) return false;
                 if (keycode == Input.Keys.ESCAPE || keycode == Input.Keys.BACK
                     || keycode == Input.Keys.ENTER || keycode == Input.Keys.NUMPAD_ENTER || keycode == Input.Keys.SPACE) {
                     UiKit.consumeModalKey();
@@ -544,6 +544,7 @@ public class MainMenuScreen extends ScreenAdapter implements NetworkManager.Frie
     private void refreshProfile() {
         PlayerProfile p = PlayerProfile.getInstance();
         shownName = p.playerName == null ? "" : p.playerName;
+        if (game != null && !shownName.isEmpty()) game.playerName = shownName;
         if (lblName != null) {
             lblName.setText(shownName);
             lblName.pack();

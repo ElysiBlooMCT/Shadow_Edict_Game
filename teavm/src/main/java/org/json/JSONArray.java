@@ -21,8 +21,7 @@ public class JSONArray {
         }
         while (true) {
             if (x.peekChar() == ',') {
-                x.nextClean();
-                list.add(null);
+                list.add(JSONObject.NULL);
             } else {
                 list.add(x.nextValue());
             }
@@ -162,7 +161,7 @@ public class JSONArray {
 
     public String optString(int index, String defaultValue) {
         Object o = opt(index);
-        return o != null ? o.toString() : defaultValue;
+        return (o == null || JSONObject.NULL.equals(o)) ? defaultValue : o.toString();
     }
 
     public JSONObject optJSONObject(int index) {

@@ -12,6 +12,8 @@ public class Lwjgl3Launcher {
         if (StartupHelper.startNewJvmIfRequired()) return; // This handles macOS support and helps on Windows.
         NetworkManager.socketFactory = JavaGameSocket::create; // kết nối online bằng socket.io bản Java
         createApplication();
+        // Đảm bảo tiến trình Desktop thoát hẳn, không treo nền do luồng non-daemon của Socket.IO
+        System.exit(0);
     }
 
     private static Lwjgl3Application createApplication() {

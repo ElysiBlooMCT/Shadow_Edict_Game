@@ -1,5 +1,6 @@
 package io.qzz.elysibloomct.ctv.se;
 
+import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.Texture;
@@ -14,7 +15,9 @@ import com.badlogic.gdx.scenes.scene2d.ui.Table;
 import com.badlogic.gdx.scenes.scene2d.ui.TextButton;
 import com.badlogic.gdx.scenes.scene2d.ui.TextField;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Hệ thống bạn bè (modal): danh sách bạn + mời vào phòng, lời mời kết bạn, tìm kiếm người chơi.
@@ -37,6 +40,9 @@ public class FriendsDialog implements NetworkManager.FriendsUpdateListener {
     private boolean dismissed = false;
     private TextField txtMyName;
     private InputListener keyListener;
+    private ScrollPane activeScroll;
+    private float savedFriendsScrollY = 0f;
+    private final Set<String> invitedUserIds = new HashSet<>();
 
     /** Đổi tên hiển thị: lưu máy + báo server để bạn bè thấy tên mới. */
     private void renameMe() {
@@ -51,6 +57,9 @@ public class FriendsDialog implements NetworkManager.FriendsUpdateListener {
         nm.playerName = name;
         if (nm.isConnected()) {
             nm.registerUserWithServer();
+            if (!currentRoomCode.isEmpty()) {
+                nm.updateMyPresence("IN_ROOM", currentRoomCode, currentMode);
+            }
             setStatus("Đã đổi tên.", UiKit.SUCCESS);
         } else {
             setStatus("Đã đổi tên trên máy. Máy chủ sẽ cập nhật khi kết nối lại.", UiKit.WARNING);
@@ -139,7 +148,7 @@ public class FriendsDialog implements NetworkManager.FriendsUpdateListener {
         keyListener = new InputListener() {
             @Override
             public boolean keyDown(InputEvent event, int keycode) {
-                if (dismissed || root.getStage() == null) return false;
+                if (dismissed || !UiKit.isTopModal(stage, root)) return false;
                 boolean typing = stage.getKeyboardFocus() instanceof TextField;
                 if (keycode == Input.Keys.ESCAPE || keycode == Input.Keys.BACK) {
                     UiKit.consumeModalKey();
@@ -154,42 +163,47 @@ public class FriendsDialog implements NetworkManager.FriendsUpdateListener {
                     case Input.Keys.F1:
                         UiKit.consumeModalKey();
                         currentTab = TAB_FRIENDS;
-                        refreshContent();
+                        refreshContent(true);
                         event.stop();
                         return true;
                     case Input.Keys.NUM_2:
                     case Input.Keys.F2:
                         UiKit.consumeModalKey();
                         currentTab = TAB_REQUESTS;
-                        refreshContent();
+                        refreshContent(true);
                         event.stop();
                         return true;
                     case Input.Keys.NUM_3:
                     case Input.Keys.F3:
                         UiKit.consumeModalKey();
                         currentTab = TAB_SEARCH;
-                        refreshContent();
+                        refreshContent(true);
                         event.stop();
                         return true;
                     case Input.Keys.LEFT:
                     case Input.Keys.A:
                         UiKit.consumeModalKey();
                         currentTab = (currentTab + 2) % 3;
-                        refreshContent();
+                        refreshContent(true);
                         event.stop();
                         return true;
                     case Input.Keys.RIGHT:
                     case Input.Keys.D:
                         UiKit.consumeModalKey();
                         currentTab = (currentTab + 1) % 3;
-                        refreshContent();
+                        refreshContent(true);
                         event.stop();
                         return true;
                     case Input.Keys.N:
                         UiKit.consumeModalKey();
                         if (txtMyName != null) {
-                            stage.setKeyboardFocus(txtMyName);
-                            txtMyName.setCursorPosition(txtMyName.getText().length());
+                            // Trì hoãn sang frame sau để ký tự 'n' từ keyTyped cùng phím không lọt vào ô tên
+                            Gdx.app.postRunnable(() -> {
+                                if (!dismissed && stage != null && txtMyName != null) {
+                                    stage.setKeyboardFocus(txtMyName);
+                                    txtMyName.setCursorPosition(txtMyName.getText().length());
+                                }
+                            });
                         }
                         event.stop();
                         return true;
@@ -216,7 +230,7 @@ public class FriendsDialog implements NetworkManager.FriendsUpdateListener {
             )
         ));
 
-        refreshContent();
+        refreshContent(false);
     }
 
     private void rebuildTabs() {
@@ -232,23 +246,31 @@ public class FriendsDialog implements NetworkManager.FriendsUpdateListener {
         TextButton b = UiKit.button(text, active ? UiKit.BLUE : UiKit.GRAY);
         UiKit.onClick(b, () -> {
             currentTab = tab;
-            refreshContent();
+            refreshContent(true);
         });
         tabBar.add(b).width(212).height(40).padRight(tab < TAB_SEARCH ? 8 : 0);
     }
 
     private void refreshContent() {
+        refreshContent(false);
+    }
+
+    private void refreshContent(boolean focusSearch) {
         if (dismissed) return;
         if (root.getStage() == null && contentTable.hasChildren()) {
             // Màn hình chứa hộp thoại đã bị đóng -> tự gỡ listener, tránh rò rỉ
             dismiss();
             return;
         }
+        if (currentTab == TAB_FRIENDS && activeScroll != null) {
+            savedFriendsScrollY = activeScroll.getScrollY();
+        }
         rebuildTabs(); // cập nhật highlight & số lượng trên tab
         contentTable.clearChildren();
+        activeScroll = null;
         if (currentTab == TAB_FRIENDS) renderFriendsTab();
         else if (currentTab == TAB_REQUESTS) renderRequestsTab();
-        else renderSearchTab();
+        else renderSearchTab(focusSearch);
     }
 
     private Table newRow() {
@@ -258,11 +280,13 @@ public class FriendsDialog implements NetworkManager.FriendsUpdateListener {
         return row;
     }
 
-    private void addScroll(Table into, Table list) {
+    private ScrollPane addScroll(Table into, Table list) {
         ScrollPane sp = new ScrollPane(list, UiKit.scrollStyle());
         sp.setFadeScrollBars(false);
         sp.setScrollingDisabled(true, false);
         into.add(sp).expand().fill();
+        activeScroll = sp;
+        return sp;
     }
 
     // ===== TAB 1: BẠN BÈ =====
@@ -298,8 +322,12 @@ public class FriendsDialog implements NetworkManager.FriendsUpdateListener {
                 row.add(infoCol).expandX().left();
 
                 if (!currentRoomCode.isEmpty() && friend.isAvailableForInvite()) {
-                    TextButton btnInvite = UiKit.button("MỜI TRẬN", UiKit.GREEN, UiKit.small());
+                    boolean alreadyInvited = invitedUserIds.contains(friend.userId);
+                    TextButton btnInvite = UiKit.button(alreadyInvited ? "ĐÃ MỜI!" : "MỜI TRẬN", UiKit.GREEN, UiKit.small());
+                    btnInvite.setDisabled(alreadyInvited);
                     UiKit.onClick(btnInvite, () -> {
+                        if (btnInvite.isDisabled()) return;
+                        invitedUserIds.add(friend.userId);
                         NetworkManager.getInstance().inviteFriendToMatch(friend.userId, currentRoomCode, currentMode);
                         btnInvite.setText("ĐÃ MỜI!");
                         btnInvite.setDisabled(true);
@@ -317,7 +345,12 @@ public class FriendsDialog implements NetworkManager.FriendsUpdateListener {
                 listTable.add(row).width(620).padBottom(6).row();
             }
         }
-        addScroll(contentTable, listTable);
+        ScrollPane sp = addScroll(contentTable, listTable);
+        if (savedFriendsScrollY > 0f) {
+            sp.layout();
+            sp.setScrollY(savedFriendsScrollY);
+            sp.updateVisualScroll();
+        }
     }
 
     // ===== TAB 2: LỜI MỜI KẾT BẠN =====
@@ -356,7 +389,7 @@ public class FriendsDialog implements NetworkManager.FriendsUpdateListener {
     }
 
     // ===== TAB 3: TÌM KIẾM =====
-    private void renderSearchTab() {
+    private void renderSearchTab(boolean focusSearch) {
         Table searchBox = new Table();
         searchBox.top();
 
@@ -421,7 +454,15 @@ public class FriendsDialog implements NetworkManager.FriendsUpdateListener {
         }
         addScroll(searchBox, resultsTable);
         contentTable.add(searchBox).expand().fill();
-        stage.setKeyboardFocus(txtSearch);
+        if (focusSearch && stage.getKeyboardFocus() != txtMyName) {
+            // Trì hoãn 1 frame để ký tự phím tắt (3/A/D) không lọt vào ô tìm kiếm
+            Gdx.app.postRunnable(() -> {
+                if (!dismissed && currentTab == TAB_SEARCH && stage != null && stage.getKeyboardFocus() != txtMyName) {
+                    stage.setKeyboardFocus(txtSearch);
+                    txtSearch.setCursorPosition(txtSearch.getText().length());
+                }
+            });
+        }
     }
 
     private void doSearch(String q) {
@@ -443,14 +484,34 @@ public class FriendsDialog implements NetworkManager.FriendsUpdateListener {
     }
 
     // Callback từ NetworkManager đã chạy trên luồng render (postRunnable)
-    @Override public void onFriendsUpdated() { refreshContent(); }
-    @Override public void onSearchResultsUpdated() { refreshContent(); }
+    @Override
+    public void onFriendsUpdated() {
+        if (dismissed) return;
+        if (currentTab == TAB_SEARCH) {
+            // Không phá hủy ô tìm kiếm / cướp focus khi làm mới danh sách bạn bè định kỳ mỗi 3s
+            rebuildTabs();
+            return;
+        }
+        refreshContent(false);
+    }
+
+    @Override
+    public void onSearchResultsUpdated() {
+        if (dismissed) return;
+        if (currentTab == TAB_SEARCH) {
+            refreshContent(false);
+        }
+    }
 
     @Override
     public void onFriendRequestReceived(String requesterId, String requesterName) {
         if (dismissed) return;
         setStatus("Lời mời kết bạn mới từ " + requesterName + " [" + requesterId + "]!", UiKit.WARNING);
-        refreshContent();
+        if (currentTab == TAB_SEARCH) {
+            rebuildTabs();
+        } else {
+            refreshContent(false);
+        }
     }
 
     public void dismiss() {
